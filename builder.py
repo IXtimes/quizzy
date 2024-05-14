@@ -28,7 +28,7 @@ def remove_backticked_imbeds(s):
     return result
 
 def measure_text_width(text):
-    font = ImageFont.truetype(resource_path('Resources/tahoma.ttf'), NORMAL_FONT_SIZE)
+    font = ImageFont.truetype(resource_path('tahoma.ttf'), NORMAL_FONT_SIZE)
     return font.getlength(text)
     
 def adjust_textbox_height(event, textbox, limit, variable):
@@ -461,7 +461,7 @@ class BuilderFrame(ctk.CTkFrame):
         else:
             # create the button that allows for a refresh (if not offline)
             if not self.settings['Offline']:
-                image = Image.open(resource_path("Resources/Enhanced.png")).resize((22,22))
+                image = Image.open(resource_path("Enhanced.png")).resize((22,22))
                 self.refresh_explaination = ctk.CTkButton(self, image=ctk.CTkImage(image), fg_color=DANGER, hover_color=DANGER_HOVER, text='Refresh Explaination', font=(FONT, NORMAL_FONT_SIZE), height=28, command=self.refresh)
                 self.refresh_explaination.pack(fill='x', expand=True, padx=10, pady=10, before=self.submit_question_button)
             
@@ -551,7 +551,7 @@ class BuilderFrame(ctk.CTkFrame):
             # set the assistant up here
             client = OpenAI(api_key=self.settings['API Key'])
             domain = "Domain: " + self.background[0] + "\n"
-            model = "gpt-3.5-turbo" if self.settings['Model'] == '3.5' else "gpt-4-turbo"
+            model = "gpt-3.5-turbo" if self.settings['Model'] == '3.5' else "gpt-4o"
             
             # we define the context by selecting a random span of context cut words from said context
             context_words = self.background[1].split(" ")
@@ -876,7 +876,7 @@ class QuestionFrame(ctk.CTkFrame):
         
         # add an ai generated logo if this content signals that this was ai generated
         if("AI Generated" in self.content):
-            ai_enhanced = ctk.CTkImage(Image.open(resource_path("Resources/AI Enhanced.png")).resize((96,96)))
+            ai_enhanced = ctk.CTkImage(Image.open(resource_path("AI Enhanced.png")).resize((96,96)))
             self.fetch_button.configure(image=ai_enhanced)
             
             # delete this key from content when intercepted
@@ -884,7 +884,7 @@ class QuestionFrame(ctk.CTkFrame):
         
         # add an flag logo if this content signals that this was flagged
         if("Flag" in self.content):
-            flagged = ctk.CTkImage(Image.open(resource_path("Resources/Flagged for Attention.png")).resize((96,96)))
+            flagged = ctk.CTkImage(Image.open(resource_path("Flagged for Attention.png")).resize((96,96)))
             self.fetch_button.configure(image=flagged)
             
             # delete this key from content when intercepted

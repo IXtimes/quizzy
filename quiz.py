@@ -398,7 +398,7 @@ class Quiz(ctk.CTkFrame):
         # configure client
         client = OpenAI(api_key=self.settings['API Key'])
         domain = "Domain: " + self.domain + "\n"
-        model = "gpt-3.5-turbo" if self.settings['Model'] == '3.5' else "gpt-4-turbo"
+        model = "gpt-3.5-turbo" if self.settings['Model'] == '3.5' else "gpt-4o"
         warn_missing_explainations = False
         
         # we define the context by selecting a random span of context cut words from said context
@@ -683,14 +683,14 @@ class QuizQuestion(ctk.CTkFrame):
         # draw the question header text
         self.question_header = ctk.CTkLabel(self.question_header_frame, text="Question " + str(index + 1), fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'))
         self.question_header.pack(side='left',padx=10, pady=10)
-        self.flag_button = ctk.CTkButton(self.question_header_frame, text='', width=32, height=32, fg_color='transparent', hover_color=LIGHT, command=self.flag_question, image=ctk.CTkImage(Image.open(resource_path("Resources/Unflagged.png")).resize((32,32)), size=(32,32)))
+        self.flag_button = ctk.CTkButton(self.question_header_frame, text='', width=32, height=32, fg_color='transparent', hover_color=LIGHT, command=self.flag_question, image=ctk.CTkImage(Image.open(resource_path("Unflagged.png")).resize((32,32)), size=(32,32)))
         self.flag_button.pack(side='right',padx=2)
         self.point_count = ctk.CTkLabel(self.question_header_frame, text="Points: 0/" + str(self.point_total), fg_color='transparent', text_color=SELECT_BG, font=(FONT, NORMAL_FONT_SIZE))
         self.point_count.pack(side='right',padx=2)
         
         # if this is an AI generated question, draw an icon to signal such
         if(isai):
-            ai_enhanced = ctk.CTkImage(Image.open(resource_path("Resources/AI Enhanced.png")).resize((32,32)), size=(32,32))
+            ai_enhanced = ctk.CTkImage(Image.open(resource_path("AI Enhanced.png")).resize((32,32)), size=(32,32))
             self.ai_indicator = ctk.CTkLabel(self.question_header_frame, image=ai_enhanced, text='')
             self.ai_indicator.pack(side='left',padx=10, pady=10)
         
@@ -754,11 +754,11 @@ class QuizQuestion(ctk.CTkFrame):
         if "Flag" in self.question_data:
             # unflag
             del self.question_data["Flag"]
-            self.flag_button.configure(image=ctk.CTkImage(Image.open(resource_path("Resources/Unflagged.png")).resize((32,32)), size=(32,32)))
+            self.flag_button.configure(image=ctk.CTkImage(Image.open(resource_path("Unflagged.png")).resize((32,32)), size=(32,32)))
         else:
             # flag
             self.question_data["Flag"] = 'True'
-            self.flag_button.configure(image=ctk.CTkImage(Image.open(resource_path("Resources/Flagged.png")).resize((32,32)), size=(32,32)))
+            self.flag_button.configure(image=ctk.CTkImage(Image.open(resource_path("Flagged.png")).resize((32,32)), size=(32,32)))
             
                   
     def has_answer(self, event = None):
@@ -808,14 +808,14 @@ class QuizQuestion(ctk.CTkFrame):
                     self.point_count.configure(text="Points: " + str(self.score) + "/" + str(self.point_total))
                     
                     # pull appropriate picture
-                    grade_pic = ctk.CTkImage(Image.open(resource_path("Resources/Correct Checkmark.png")).resize((96,96)), size=(96,96))
+                    grade_pic = ctk.CTkImage(Image.open(resource_path("Correct Checkmark.png")).resize((96,96)), size=(96,96))
                     
                     # color button appropriately
                     self.parent.question_buttons[self.index].configure(fg_color=SUCCESS)
                     self.parent.question_buttons[self.index].configure(hover_color=SUCCESS_HOVER)
                 else:
                     # pull appropriate picture
-                    grade_pic = ctk.CTkImage(Image.open(resource_path("Resources/Incorrect Cross.png")).resize((96,96)), size=(96,96))
+                    grade_pic = ctk.CTkImage(Image.open(resource_path("Incorrect Cross.png")).resize((96,96)), size=(96,96))
                     
                     # color button appropriately
                     self.parent.question_buttons[self.index].configure(fg_color=PRIMARY)
@@ -843,19 +843,19 @@ class QuizQuestion(ctk.CTkFrame):
                 
                 # pull appropriate picture
                 if self.score / self.point_total == 1:
-                    grade_pic = ctk.CTkImage(Image.open(resource_path("Resources/Correct Checkmark.png")).resize((96,96)), size=(96,96))
+                    grade_pic = ctk.CTkImage(Image.open(resource_path("Correct Checkmark.png")).resize((96,96)), size=(96,96))
                     
                     # color button appropriately
                     self.parent.question_buttons[self.index].configure(fg_color=SUCCESS)
                     self.parent.question_buttons[self.index].configure(hover_color=SUCCESS_HOVER)
                 elif self.score / self.point_total == 0:
-                    grade_pic = ctk.CTkImage(Image.open(resource_path("Resources/Incorrect Cross.png")).resize((96,96)), size=(96,96))
+                    grade_pic = ctk.CTkImage(Image.open(resource_path("Incorrect Cross.png")).resize((96,96)), size=(96,96))
                     
                     # color button appropriately
                     self.parent.question_buttons[self.index].configure(fg_color=PRIMARY)
                     self.parent.question_buttons[self.index].configure(hover_color=PRIMARY_HOVER)
                 else:
-                    grade_pic = ctk.CTkImage(Image.open(resource_path("Resources/Partial Equals.png")).resize((96,96)), size=(96,96))
+                    grade_pic = ctk.CTkImage(Image.open(resource_path("Partial Equals.png")).resize((96,96)), size=(96,96))
                     
                     # color button appropriately
                     self.parent.question_buttons[self.index].configure(fg_color=PARTIAL)
@@ -883,19 +883,19 @@ class QuizQuestion(ctk.CTkFrame):
             
             # pull appropriate picture
             if self.score / self.point_total == 1:
-                grade_pic = ctk.CTkImage(Image.open(resource_path("Resources/Correct Checkmark.png")).resize((96,96)), size=(96,96))
+                grade_pic = ctk.CTkImage(Image.open(resource_path("Correct Checkmark.png")).resize((96,96)), size=(96,96))
                     
                 # color button appropriately
                 self.parent.question_buttons[self.index].configure(fg_color=SUCCESS)
                 self.parent.question_buttons[self.index].configure(hover_color=SUCCESS_HOVER)
             elif self.score / self.point_total == 0:
-                grade_pic = ctk.CTkImage(Image.open(resource_path("Resources/Incorrect Cross.png")).resize((96,96)), size=(96,96))
+                grade_pic = ctk.CTkImage(Image.open(resource_path("Incorrect Cross.png")).resize((96,96)), size=(96,96))
                     
                 # color button appropriately
                 self.parent.question_buttons[self.index].configure(fg_color=PRIMARY)
                 self.parent.question_buttons[self.index].configure(hover_color=PRIMARY_HOVER)
             else:
-                grade_pic = ctk.CTkImage(Image.open(resource_path("Resources/Partial Equals.png")).resize((96,96)), size=(96,96))
+                grade_pic = ctk.CTkImage(Image.open(resource_path("Partial Equals.png")).resize((96,96)), size=(96,96))
                     
                 # color button appropriately
                 self.parent.question_buttons[self.index].configure(fg_color=PARTIAL)

@@ -7,7 +7,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 def measure_text_width(text):
-    font = ImageFont.truetype(resource_path('Resources/tahoma.ttf'), NORMAL_FONT_SIZE)
+    font = ImageFont.truetype(resource_path('tahoma.ttf'), NORMAL_FONT_SIZE)
     width = font.getlength(text)
     return width
 

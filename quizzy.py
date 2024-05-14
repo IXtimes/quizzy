@@ -23,7 +23,7 @@ class Quizzy(ctk.CTk):
         super().__init__(fg_color=BG)
         self.title('Quizzy')
         self.geometry('1000x925')
-        self.iconbitmap(resource_path('Resources/Quizzy_Icon.ico'))
+        self.iconbitmap(resource_path('Quizzy_Icon.ico'))
         self.resizable(False, False)
         
         # map closing with the x button
@@ -150,7 +150,7 @@ class MainMenu(ctk.CTkFrame):
         # API key entry
         self.apikey_label = ctk.CTkLabel(self.settings_region, text="OpenAI API Key:", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
         self.apikey_label.grid(row=0, column=0, sticky='en', padx=10, pady=3)
-        image = Image.open(resource_path("Resources/Enhanced.png")).resize((22,22))
+        image = Image.open(resource_path("Enhanced.png")).resize((22,22))
         self.show_apikey = ctk.CTkButton(self.settings_region, image=ctk.CTkImage(image), fg_color=DANGER, hover_color=DANGER_HOVER, text='Show API Key', font=(FONT, NORMAL_FONT_SIZE), height=28, width=400, command=self.show_api_key)
         self.show_apikey.grid(row=0, column=1, sticky='snew', padx=25, pady=2)
         self.apikey_frame_amnt = ctk.CTkTextbox(self.settings_region, font=(FONT, NORMAL_FONT_SIZE), height=20, width=400)
