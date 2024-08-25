@@ -220,9 +220,9 @@ class QuizFrame(ctk.CTkFrame):
         
         # data
         self.question_count = tk.IntVar()
-        self.question_count.set(3)
+        self.question_count.set(0)
         self.question_count_amount = tk.StringVar()
-        self.question_count_amount.set("3")
+        self.question_count_amount.set("0")
         self.per_page = tk.IntVar()
         self.per_page.set(1)
         self.per_page_amount = tk.StringVar()
@@ -235,75 +235,13 @@ class QuizFrame(ctk.CTkFrame):
         self.timer.set(0)
         self.timer_amount = tk.StringVar()
         self.timer_amount.set("0")
+        self.quiz_condition = self.parent.q_count.get() < 3
         
-        # settings widgets for creating a new quiz
-        self.quiz_maker_label = ctk.CTkLabel(self, text="Start a Practice Quiz", fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'))
-        self.quiz_maker_label.pack(padx=10, pady=10, anchor='w')
-        
-        # slider for question count
-        self.question_count_frame = ctk.CTkFrame(self, fg_color='transparent')
-        self.q_count_label = ctk.CTkLabel(self.question_count_frame, text="Num Questions: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
-        self.q_count_label.pack(side='left', expand=True, fill='x', padx=10, pady=3)
-        self.q_count_amnt = ctk.CTkTextbox(self.question_count_frame, font=(FONT, NORMAL_FONT_SIZE), height=20)
-        self.q_count_amnt.insert(tk.END, self.question_count_amount.get())
-        self.q_count_slider = ctk.CTkSlider(self.question_count_frame, from_=3, to=self.parent.q_count.get(), variable=self.question_count, command=lambda x:self.get_new_amount(self.q_count_amnt, self.question_count, self.question_count_amount))
-        self.q_count_slider.pack(side='left', expand=True, fill='x', padx=10, pady=3)
-        self.q_count_amnt.pack(side='left', expand=True, fill='x', padx=10, pady=3)
-        self.q_count_amnt.bind("<KeyRelease>", lambda x:self.attempt_pushing_textbox_amount(self.q_count_amnt, self.question_count, self.question_count_amount, 0))
-        self.question_count_frame.pack(padx=10, pady=3)
-        
-        # slider for questions per page
-        self.per_page_frame = ctk.CTkFrame(self, fg_color='transparent')
-        self.p_count_label = ctk.CTkLabel(self.per_page_frame, text="Qs per Page: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
-        self.p_count_label.pack(side='left', expand=True, fill='x', padx=10, pady=3)
-        self.p_count_amnt = ctk.CTkTextbox(self.per_page_frame, font=(FONT, NORMAL_FONT_SIZE), height=20)
-        self.p_count_amnt.insert(tk.END, self.per_page_amount.get())
-        self.p_count_slider = ctk.CTkSlider(self.per_page_frame, from_=1, to=self.question_count.get() if self.question_count.get() < 50 else 50, variable=self.per_page, command=lambda x:self.get_new_amount(self.p_count_amnt, self.per_page, self.per_page_amount))
-        self.p_count_slider.pack(side='left', expand=True, fill='x', padx=10, pady=3)
-        self.p_count_amnt.pack(side='left', expand=True, fill='x', padx=10, pady=3)
-        self.p_count_amnt.bind("<KeyRelease>", lambda x:self.attempt_pushing_textbox_amount(self.p_count_amnt, self.per_page, self.per_page_amount, 1))
-        self.per_page_frame.pack(padx=10, pady=3)
-        
-        # slider for frq proportion
-        self.frq_prop_frame = ctk.CTkFrame(self, fg_color='transparent')
-        self.frq_prop_label = ctk.CTkLabel(self.frq_prop_frame, text="FRQ Percentage: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
-        self.frq_prop_label.pack(side='left', expand=True, fill='x', padx=10, pady=3)
-        self.frq_prop_amnt = ctk.CTkTextbox(self.frq_prop_frame, font=(FONT, NORMAL_FONT_SIZE), height=20)
-        self.frq_prop_amnt.insert(tk.END, self.frq_prop_amount.get())
-        self.frq_prop_slider = ctk.CTkSlider(self.frq_prop_frame, from_=0, to=100, variable=self.frq_prop, command=lambda x:self.get_new_amount(self.frq_prop_amnt, self.frq_prop, self.frq_prop_amount))
-        self.frq_prop_slider.pack(side='left', expand=True, fill='x', padx=10, pady=3)
-        self.frq_prop_amnt.pack(side='left', expand=True, fill='x', padx=10, pady=3)
-        self.frq_prop_amnt.bind("<FocusOut>", lambda x:self.attempt_pushing_textbox_amount(self.frq_prop_amnt, self.frq_prop, self.frq_prop_amount, 2))
-        self.frq_prop_frame.pack(padx=10, pady=3)
-        
-        # entry for timer
-        self.timer_frame = ctk.CTkFrame(self, fg_color='transparent')
-        self.timer_label = ctk.CTkLabel(self.timer_frame, text="Time limit (in mins): ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
-        self.timer_label.pack(side='left', expand=True, fill='x', padx=10, pady=3)
-        self.timer_frame_amnt = ctk.CTkTextbox(self.timer_frame, font=(FONT, NORMAL_FONT_SIZE), height=20)
-        self.timer_frame_amnt.insert(tk.END, self.timer_amount.get())
-        self.timer_frame_amnt.pack(side='left', expand=True, fill='x', padx=10, pady=3)
-        self.timer_frame_amnt.bind("<KeyRelease>", lambda x:self.attempt_pushing_textbox_amount(self.timer_frame_amnt, self.timer, self.timer_amount, 3))
-        self.timer_frame.pack(padx=10, pady=3)
-        
-        # buttons for ai test formats
-        self.explaination = ctk.CTkLabel(self, text='Pick a format to generate a test with these settings:', font=(FONT, NORMAL_FONT_SIZE))
-        self.explaination.pack(pady=2.5)
-        self.ai_gen_test_frame = ctk.CTkFrame(self, fg_color='transparent')
-        self.gen_test_buttons = []
-        text_set = ('Rehersed\n(0% generated)', 'Familiar\n(33% generated)', 'Foreign\n(66% generated)', 'Unique\n(100% generated)')
-        color_set = (SUCCESS, WARNING, DANGER, PRIMARY)
-        hover_color_set = (SUCCESS_HOVER, WARNING_HOVER, DANGER_HOVER, PRIMARY_HOVER)
-        for i in range(4):
-            # create the button
-            self.gen_test_buttons.append(ctk.CTkButton(self.ai_gen_test_frame, text=text_set[i], fg_color=color_set[i], hover_color=hover_color_set[i], font=(FONT, NORMAL_FONT_SIZE), width=80, height=56, command=lambda x=i:self.make_quiz(x)))
-            self.gen_test_buttons[i].pack(side='left', expand=True, fill='x', padx=10, pady=5)
-        self.ai_gen_test_frame.pack(padx=10, pady=10)
-        
-        # create dynamic trace
-        self.parent.q_count.trace_add('write', self.update_sliders)
-        self.question_count.trace_add('write', self.update_sliders)
+        # create trace for question change condition
         self.parent.q_count.trace_add('write', self.check_for_valid_gen)
+        
+        # inital draw check
+        self.check_for_valid_gen()
         
         # pack
         self.pack(ipadx=20, fill='x', padx=20, pady=20) 
@@ -336,18 +274,121 @@ class QuizFrame(ctk.CTkFrame):
         self.after(100, lambda:self.get_quiz(data, content, counts, self.settings))
         
     def check_for_valid_gen(self, *args):
-        # check if we have a valid number of questions to generate a practice quiz
-        if(self.parent.q_count.get() < 3):
-            # disable the buttons
-            for button in self.gen_test_buttons:
-                button.configure(state='disabled')
+        # check if this change in question count changes the quiz condition
+        condition_changed = self.quiz_condition != (self.parent.q_count.get() >= 3)
+        print(self.quiz_condition)
+        print(self.parent.q_count.get() >= 3)
+        
+        # if we are on a question count of 3 or 4, due to edge case auto flag condition changed
+        if(self.parent.q_count.get() == 3 or self.parent.q_count.get() == 4):
+            condition_changed = True
+        
+        print(condition_changed)
+        
+        if(condition_changed):
+            # check if we have a valid number of questions to generate a practice quiz
+            if(self.parent.q_count.get() < 3):
+                print("Failed race condition")
+                for child in self.winfo_children():
+                    child.destroy()
+                
+                # undraw the contents of the quiz frame
+                self.draw_quiz_frame(False)
+            else:
+                print("Pass race condition")
+                for child in self.winfo_children():
+                    child.destroy()
+                
+                # draw the contents of the quiz frame
+                self.draw_quiz_frame(True)
+                
+                # enable the buttons (if online for ai buttons)
+                for i, button in enumerate(self.gen_test_buttons):
+                    if self.settings['Offline'] and i != 0:
+                        button.configure(state='disabled')
+                    else:
+                        button.configure(state='normal')
+                        
+        # push new condition status
+        self.quiz_condition = self.parent.q_count.get() >= 3
+                    
+    def draw_quiz_frame(self, state):
+        # check if we are drawing the contents of the quiz frame
+        if state:
+            # settings widgets for creating a new quiz
+            self.quiz_maker_label = ctk.CTkLabel(self, text="Start a Practice Quiz", fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'))
+            self.quiz_maker_label.pack(padx=10, pady=10, anchor='w')
+            
+            # slider for question count
+            self.question_count.set(3)
+            if self.parent.q_count.get() != 3:
+                self.question_count_frame = ctk.CTkFrame(self, fg_color='transparent')
+                self.q_count_label = ctk.CTkLabel(self.question_count_frame, text="Num Questions: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+                self.q_count_label.pack(side='left', expand=True, fill='x', padx=10, pady=3)
+                self.q_count_amnt = ctk.CTkTextbox(self.question_count_frame, font=(FONT, NORMAL_FONT_SIZE), height=20)
+                self.q_count_amnt.insert(tk.END, self.question_count_amount.get())
+                self.q_count_slider = ctk.CTkSlider(self.question_count_frame, from_=3, to=self.parent.q_count.get(), variable=self.question_count, command=lambda x:self.get_new_amount(self.q_count_amnt, self.question_count, self.question_count_amount))
+                self.q_count_slider.pack(side='left', expand=True, fill='x', padx=10, pady=3)
+                self.q_count_amnt.pack(side='left', expand=True, fill='x', padx=10, pady=3)
+                self.q_count_amnt.bind("<KeyRelease>", lambda x:self.attempt_pushing_textbox_amount(self.q_count_amnt, self.question_count, self.question_count_amount, 0))
+                self.question_count_frame.pack(padx=10, pady=3)
+            
+            # slider for questions per page
+            self.per_page_frame = ctk.CTkFrame(self, fg_color='transparent')
+            self.p_count_label = ctk.CTkLabel(self.per_page_frame, text="Qs per Page: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+            self.p_count_label.pack(side='left', expand=True, fill='x', padx=10, pady=3)
+            self.p_count_amnt = ctk.CTkTextbox(self.per_page_frame, font=(FONT, NORMAL_FONT_SIZE), height=20)
+            self.p_count_amnt.insert(tk.END, self.per_page_amount.get())
+            self.p_count_slider = ctk.CTkSlider(self.per_page_frame, from_=1, to=self.question_count.get() if self.question_count.get() < 50 else 50, variable=self.per_page, command=lambda x:self.get_new_amount(self.p_count_amnt, self.per_page, self.per_page_amount))
+            self.p_count_slider.pack(side='left', expand=True, fill='x', padx=10, pady=3)
+            self.p_count_amnt.pack(side='left', expand=True, fill='x', padx=10, pady=3)
+            self.p_count_amnt.bind("<KeyRelease>", lambda x:self.attempt_pushing_textbox_amount(self.p_count_amnt, self.per_page, self.per_page_amount, 1))
+            self.per_page_frame.pack(padx=10, pady=3)
+            
+            # slider for frq proportion
+            self.frq_prop_frame = ctk.CTkFrame(self, fg_color='transparent')
+            self.frq_prop_label = ctk.CTkLabel(self.frq_prop_frame, text="FRQ Percentage: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+            self.frq_prop_label.pack(side='left', expand=True, fill='x', padx=10, pady=3)
+            self.frq_prop_amnt = ctk.CTkTextbox(self.frq_prop_frame, font=(FONT, NORMAL_FONT_SIZE), height=20)
+            self.frq_prop_amnt.insert(tk.END, self.frq_prop_amount.get())
+            self.frq_prop_slider = ctk.CTkSlider(self.frq_prop_frame, from_=0, to=100, variable=self.frq_prop, command=lambda x:self.get_new_amount(self.frq_prop_amnt, self.frq_prop, self.frq_prop_amount))
+            self.frq_prop_slider.pack(side='left', expand=True, fill='x', padx=10, pady=3)
+            self.frq_prop_amnt.pack(side='left', expand=True, fill='x', padx=10, pady=3)
+            self.frq_prop_amnt.bind("<FocusOut>", lambda x:self.attempt_pushing_textbox_amount(self.frq_prop_amnt, self.frq_prop, self.frq_prop_amount, 2))
+            self.frq_prop_frame.pack(padx=10, pady=3)
+            
+            # entry for timer
+            self.timer_frame = ctk.CTkFrame(self, fg_color='transparent')
+            self.timer_label = ctk.CTkLabel(self.timer_frame, text="Time limit (in mins): ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+            self.timer_label.pack(side='left', expand=True, fill='x', padx=10, pady=3)
+            self.timer_frame_amnt = ctk.CTkTextbox(self.timer_frame, font=(FONT, NORMAL_FONT_SIZE), height=20)
+            self.timer_frame_amnt.insert(tk.END, self.timer_amount.get())
+            self.timer_frame_amnt.pack(side='left', expand=True, fill='x', padx=10, pady=3)
+            self.timer_frame_amnt.bind("<KeyRelease>", lambda x:self.attempt_pushing_textbox_amount(self.timer_frame_amnt, self.timer, self.timer_amount, 3))
+            self.timer_frame.pack(padx=10, pady=3)
+            
+            # buttons for ai test formats
+            self.explaination = ctk.CTkLabel(self, text='Pick a format to generate a test with these settings:', font=(FONT, NORMAL_FONT_SIZE))
+            self.explaination.pack(pady=2.5)
+            self.ai_gen_test_frame = ctk.CTkFrame(self, fg_color='transparent')
+            self.gen_test_buttons = []
+            text_set = ('Rehersed\n(0% generated)', 'Familiar\n(33% generated)', 'Foreign\n(66% generated)', 'Unique\n(100% generated)')
+            color_set = (SUCCESS, WARNING, DANGER, PRIMARY)
+            hover_color_set = (SUCCESS_HOVER, WARNING_HOVER, DANGER_HOVER, PRIMARY_HOVER)
+            for i in range(4):
+                # create the button
+                self.gen_test_buttons.append(ctk.CTkButton(self.ai_gen_test_frame, text=text_set[i], fg_color=color_set[i], hover_color=hover_color_set[i], font=(FONT, NORMAL_FONT_SIZE), width=80, height=56, command=lambda x=i:self.make_quiz(x)))
+                self.gen_test_buttons[i].pack(side='left', expand=True, fill='x', padx=10, pady=5)
+            self.ai_gen_test_frame.pack(padx=10, pady=10)
+            
+            # create dynamic trace
+            self.parent.q_count.trace_add('write', self.update_sliders)
+            self.question_count.trace_add('write', self.update_sliders)
+            self.update_sliders()
         else:
-            # enable the buttons (if online for ai buttons)
-            for i, button in enumerate(self.gen_test_buttons):
-                if self.settings['Offline'] and i != 0:
-                    button.configure(state='disabled')
-                else:
-                    button.configure(state='normal')
+            # only draw label stating we need 3 questions
+            self.quiz_maker_label = ctk.CTkLabel(self, text="Create at least 3 questions to start a quiz!", fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'))
+            self.quiz_maker_label.pack(padx=10, pady=10, anchor='w')
         
     def get_new_amount(self, textbox, num_var, str_var):
         # write the amount to the string var holding the question count selected
@@ -384,21 +425,24 @@ class QuizFrame(ctk.CTkFrame):
     
     def update_sliders(self, *args):
         # update the to/from of the sliders where needed
-        self.q_count_slider.configure(to=self.parent.q_count.get())
+        if self.parent.q_count.get() != 3:
+            self.q_count_slider.configure(to=self.parent.q_count.get())
         self.p_count_slider.configure(to=self.question_count.get() if self.question_count.get() < 50 else 50)
         
         # set the amount in question count to its maximum is it is exceeded
-        if self.question_count.get() > self.parent.q_count.get():
-            self.question_count.set(self.parent.q_count.get())
-            self.question_count_amount.set(str(self.parent.q_count.get()))
-            self.attempt_pushing_textbox_amount(self.q_count_amnt, self.question_count, self.question_count_amount, 0)
+        if self.parent.q_count.get() != 3:
+            if self.question_count.get() > self.parent.q_count.get():
+                self.question_count.set(self.parent.q_count.get())
+                self.question_count_amount.set(str(self.parent.q_count.get()))
+                self.attempt_pushing_textbox_amount(self.q_count_amnt, self.question_count, self.question_count_amount, 0)
         if self.per_page.get() > self.question_count.get():
             self.per_page.set(self.question_count.get() if self.question_count.get() < 50 else 50)
             self.per_page_amount.set(str(self.per_page.get()))
             self.attempt_pushing_textbox_amount(self.p_count_amnt, self.per_page, self.per_page_amount, 1)
             
         # lastly update the slider positions
-        self.q_count_slider.set(self.question_count.get())
+        if self.parent.q_count.get() != 3:
+            self.q_count_slider.set(self.question_count.get())
         self.p_count_slider.set(self.per_page.get())
         
 class BuilderFrame(ctk.CTkFrame):

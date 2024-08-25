@@ -1,3 +1,4 @@
 build/
 dist/
 signature.txt
+__pycache__/
