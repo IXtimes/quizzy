@@ -578,7 +578,7 @@ class BuilderFrame(ctk.CTkFrame):
         submit_list['Forced'] = str(self.question.forced.get())
         
         # check if we have at least one correct answer and one incorrect answer if we are offline
-        if self.settings['Offline'] and not "C1" in submit_list or not "A1" in submit_list:
+        if self.settings['Offline'] and (not "C1" in submit_list or not "A1" in submit_list):
             messagebox.showwarning("Offline!", "Sorry, since you are in offline mode you must provide at least one correct and incorrect answer to the question before you can submit it to your deck!")
             
             return
