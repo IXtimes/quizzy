@@ -398,7 +398,7 @@ class Quiz(ctk.CTkFrame):
         # configure client
         client = OpenAI(api_key=self.settings['API Key'])
         domain = "Domain: " + self.domain + "\n"
-        model = "gpt-3.5-turbo" if self.settings['Model'] == '3.5' else "gpt-4o"
+        model = "gpt-4o-mini" if self.settings['Model'] == '3.5' else "gpt-4o"
         warn_missing_explainations = False
         
         # we define the context by selecting a random span of context cut words from said context
@@ -406,10 +406,10 @@ class Quiz(ctk.CTkFrame):
         start_point = random.choice(range(0, max(len(context_words) - int(self.settings['ContextCut']), 1)))
         context = "Context: " + " ".join(context_words[start_point:min(start_point+int(self.settings['ContextCut']), len(context_words))]) + "\n"
         
-        # iterate over the number of questions to generate (x5)
-        for something_something_idk in range ((self.ai_q_count - 1) // 5 + 1):
+        # iterate over the number of questions to generate (x{batch})
+        for __ in range ((self.ai_q_count - 1) // self.settings['Batch'] + 1):
             # get the number of questions to prompt for
-            prompt_count = min(self.ai_q_count - processed, 5)
+            prompt_count = min(self.ai_q_count - processed, self.settings['Batch'])
             
             # get a textual representation of the prompt count to emphasize the amount requested
             if prompt_count == 1:

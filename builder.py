@@ -2,13 +2,13 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import messagebox
 from tkinter import filedialog
-from tkinter import ttk
-import os
 from options import *
 from openai import OpenAI
 from PIL import Image, ImageFont
 import json
 import random
+import requests
+from QAPI import *
 
 def remove_backticked_imbeds(s):
     # split the input based on backticked imbeds
@@ -553,7 +553,33 @@ class BuilderFrame(ctk.CTkFrame):
             self.refresh_explaination.destroy()
         if self.explain_frame:
             self.explain_frame.destroy()
+            
+    def get_image_embed_links_if_any(self, question):
+        # Split the question content into chunks to search for the first img embed
+        imbeds = question.split('```')
         
+        for i, chunk in enumerate(imbeds):
+            if i % 2 != 0:
+                # determine what imbed we are using
+                header = chunk.split(':')[0]
+                if header == "img":
+                    # we are imbedding an image, remove header from string
+                    link = chunk[4:]
+                    
+                    # fetch the image using a request
+                    response = requests.get(link)
+                    
+                    # check if successful
+                    if response.status_code == 200:
+                        # return link
+                        return link
+                    else:
+                        # return blank
+                        return ""
+                    
+        # return blank if no link is found
+        return ""
+                                
     def submit_question(self):
         # check that the question field has content
         if(len(self.question.question_entry.get('1.0', 'end-1c')) < 1):
@@ -595,12 +621,14 @@ class BuilderFrame(ctk.CTkFrame):
             # set the assistant up here
             client = OpenAI(api_key=self.settings['API Key'])
             domain = "Domain: " + self.background[0] + "\n"
-            model = "gpt-3.5-turbo" if self.settings['Model'] == '3.5' else "gpt-4o"
+            model = "gpt-4o-mini" if self.settings['Model'] == '3.5' else "gpt-4o"
             
             # we define the context by selecting a random span of context cut words from said context
             context_words = self.background[1].split(" ")
             start_point = random.choice(range(0, max(len(context_words) - int(self.settings['ContextCut']), 1)))
             context = "Context: " + " ".join(context_words[start_point:min(start_point+int(self.settings['ContextCut']), len(context_words))]) + "\n"
+            img_link = self.get_image_embed_links_if_any(submit_list['Q'])
+            system_img = """Use the image that you are provided to aid in constructing your response.""" if img_link != "" else ""
             
             # determine if we need answer choices
             if not "C1" in submit_list.keys() and not "A1" in submit_list.keys():
@@ -612,7 +640,7 @@ class BuilderFrame(ctk.CTkFrame):
                             The input you receive will also be minimal to help with processing and costs associated. You will ALWAYS be given a domain, denoted with the prefix "Domain:" for which the question comes from. In addition, you will ALWAYS be given a subset of "Context:" for which you should prioritize when synthesizing your answer. Lastly, you will receive one of the following:
                             - A question followed by a request for answer choices (provide a correct answer and 3 incorrect answer choices in that order, side note, if you anticipate the question is a true or false question, then only specify 1 correct answer and 1 incorrect answer)
                                 - Ex. output 1:
-                                    C~ They can be passed as arguments to other functions, returned as values from other functions, assigned to variables, and stored in data structures
+                                    C~ They can be assigned to variables, passed as arguments, and returned as values.
                                     I~ They can only be assigned to variables and stored in data structures
                                     I~ They can only be passed as arguments to other functions
                                     I~ They can only be returned as values from other functions
@@ -632,8 +660,18 @@ class BuilderFrame(ctk.CTkFrame):
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": domain + context + background + request}
+                        {"role": "system", "content": system + system_img},
+                        {"role": "user", "content": domain + context + background + request} if img_link == "" else {"role": "user", 
+                                                                                                                     "content": [
+                                                                                                                         {"type": "text", "text": domain + context + background + request},
+                                                                                                                         {
+                                                                                                                             "type": "image_url",
+                                                                                                                             "image_url": {
+                                                                                                                                 "url": img_link
+                                                                                                                             }
+                                                                                                                         }
+                                                                                                                         ]},
+                        
                     ]
                 )
                 
@@ -701,8 +739,18 @@ class BuilderFrame(ctk.CTkFrame):
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": domain + context + background + request}
+                        {"role": "system", "content": system + system_img},
+                        {"role": "user", "content": domain + context + background + request} if img_link == "" else {"role": "user", 
+                                                                                                                     "content": [
+                                                                                                                         {"type": "text", "text": domain + context + background + request},
+                                                                                                                         {
+                                                                                                                             "type": "image_url",
+                                                                                                                             "image_url": {
+                                                                                                                                 "url": img_link
+                                                                                                                             }
+                                                                                                                         }
+                                                                                                                         ]},
+                        
                     ]
                 )
                 
@@ -762,8 +810,18 @@ class BuilderFrame(ctk.CTkFrame):
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": domain + context + background + request}
+                        {"role": "system", "content": system + system_img},
+                        {"role": "user", "content": domain + context + background + request} if img_link == "" else {"role": "user", 
+                                                                                                                     "content": [
+                                                                                                                         {"type": "text", "text": domain + context + background + request},
+                                                                                                                         {
+                                                                                                                             "type": "image_url",
+                                                                                                                             "image_url": {
+                                                                                                                                 "url": img_link
+                                                                                                                             }
+                                                                                                                         }
+                                                                                                                         ]},
+                        
                     ]
                 )
                 
@@ -834,8 +892,18 @@ class BuilderFrame(ctk.CTkFrame):
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": domain + context + background + request}
+                        {"role": "system", "content": system + system_img},
+                        {"role": "user", "content": domain + context + background + request} if img_link == "" else {"role": "user", 
+                                                                                                                     "content": [
+                                                                                                                         {"type": "text", "text": domain + context + background + request},
+                                                                                                                         {
+                                                                                                                             "type": "image_url",
+                                                                                                                             "image_url": {
+                                                                                                                                 "url": img_link
+                                                                                                                             }
+                                                                                                                         }
+                                                                                                                         ]},
+                        
                     ]
                 )
                 

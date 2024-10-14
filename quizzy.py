@@ -1,14 +1,12 @@
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import messagebox
-from tkinter import ttk
 from options import *
 from builder import *
 from quiz import *
-import re
 import os
 import json
-from openai import OpenAI
+from QAPI import *
 
 # RegeX patterns
 patterns = {
@@ -143,8 +141,10 @@ class MainMenu(ctk.CTkFrame):
         self.settings_expl = ctk.CTkLabel(self.settings_frame, text='Configure Quizzy\'s features here:', font=(FONT, NORMAL_FONT_SIZE))
         self.settings_expl.pack(pady=2.5)
         self.settings_region = ctk.CTkFrame(self.settings_frame, fg_color='transparent')
-        self.settings_region.columnconfigure((0,1),weight=1)
-        self.settings_region.rowconfigure((0,1,2,3),weight=1)
+        self.settings_region.columnconfigure(0,weight=2)
+        self.settings_region.columnconfigure(1,weight=3)
+        self.settings_region.columnconfigure(2,weight=1)
+        self.settings_region.rowconfigure((0,1,2,3,4),weight=1)
         self.settings_region.pack(pady=2.5, padx=10)
         
         # API key entry
@@ -152,7 +152,7 @@ class MainMenu(ctk.CTkFrame):
         self.apikey_label.grid(row=0, column=0, sticky='en', padx=10, pady=3)
         image = Image.open(resource_path("Enhanced.png")).resize((22,22))
         self.show_apikey = ctk.CTkButton(self.settings_region, image=ctk.CTkImage(image), fg_color=DANGER, hover_color=DANGER_HOVER, text='Show API Key', font=(FONT, NORMAL_FONT_SIZE), height=28, width=400, command=self.show_api_key)
-        self.show_apikey.grid(row=0, column=1, sticky='snew', padx=25, pady=2)
+        self.show_apikey.grid(row=0, column=1, sticky='snew', padx=25, pady=2, columnspan=2)
         self.apikey_frame_amnt = ctk.CTkTextbox(self.settings_region, font=(FONT, NORMAL_FONT_SIZE), height=20, width=400)
         
         # Model selection
@@ -161,11 +161,11 @@ class MainMenu(ctk.CTkFrame):
         self.model_to_be = ctk.CTkFrame(self.settings_region, fg_color='transparent')
         self.model_label = ctk.CTkLabel(self.settings_region, text="Model:", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
         self.model_label.grid(row=1, column=0, sticky='ne', padx=25, pady=2)
-        self.GPT4 = ctk.CTkRadioButton(self.model_to_be, radiobutton_height=12, radiobutton_width=12, text="GPT-4.0 (Advanced)", variable=self.model, font=(FONT, NORMAL_FONT_SIZE), value=1)
+        self.GPT4 = ctk.CTkRadioButton(self.model_to_be, radiobutton_height=12, radiobutton_width=12, text="GPT-4o (Smarter, costly)", variable=self.model, font=(FONT, NORMAL_FONT_SIZE), value=1)
         self.GPT4.pack(side='right', padx=40)
-        self.GPT35 = ctk.CTkRadioButton(self.model_to_be, radiobutton_height=12, radiobutton_width=12, text="GPT-3.5 (Cheaper)", variable=self.model, font=(FONT, NORMAL_FONT_SIZE), value=0)
+        self.GPT35 = ctk.CTkRadioButton(self.model_to_be, radiobutton_height=12, radiobutton_width=12, text="GPT-4o mini (Cheap, lightweight)", variable=self.model, font=(FONT, NORMAL_FONT_SIZE), value=0)
         self.GPT35.pack(side='right', padx=40)
-        self.model_to_be.grid(row=1, column=1, sticky='nw', padx=25, pady=2)
+        self.model_to_be.grid(row=1, column=1, sticky='nw', padx=25, pady=2, columnspan=2)
         
         # Offline mode
         self.offline = tk.IntVar()
@@ -177,13 +177,23 @@ class MainMenu(ctk.CTkFrame):
         self.is_offline.pack(side='right', padx=40)
         self.is_online = ctk.CTkRadioButton(self.offline_to_be, radiobutton_height=12, radiobutton_width=12, text="No", variable=self.offline, font=(FONT, NORMAL_FONT_SIZE), value=0)
         self.is_online.pack(side='right', padx=40)
-        self.offline_to_be.grid(row=2, column=1, sticky='nw', padx=25, pady=2)
+        self.offline_to_be.grid(row=2, column=1, sticky='nw', padx=25, pady=2, columnspan=2)
         
         # Context cutoff entry
         self.context_cutoff_label = ctk.CTkLabel(self.settings_region, text="Context cutoff:", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
         self.context_cutoff_label.grid(row=3, column=0, sticky='ne', padx=25, pady=2)
         self.context_cutoff_amnt = ctk.CTkTextbox(self.settings_region, font=(FONT, NORMAL_FONT_SIZE), height=20)
-        self.context_cutoff_amnt.grid(row=3, column=1, sticky='snew', padx=25, pady=2)
+        self.context_cutoff_amnt.grid(row=3, column=1, sticky='snew', padx=25, pady=2, columnspan=2)
+        
+        # slider for batch size
+        self.batch_size = tk.IntVar()
+        self.batch_size.set(5)
+        self.batch_size_label = ctk.CTkLabel(self.settings_region, text="Batch size: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+        self.batch_size_label.grid(row=4, column=0, sticky='ne', padx=25, pady=2)
+        self.batch_size_amount_label = ctk.CTkLabel(self.settings_region, textvariable=self.batch_size, fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+        self.batch_size_amount_label.grid(row=4, column=2, sticky='nw', padx=25, pady=2)
+        self.batch_size_slider = ctk.CTkSlider(self.settings_region, from_=1, to=5, variable=self.batch_size)
+        self.batch_size_slider.grid(row=4, column=1, sticky='ew', padx=25, pady=2)
         
         # Once the entire UI has loaded in, fetch the settings and write them to the settings fields
         try:
@@ -204,11 +214,20 @@ class MainMenu(ctk.CTkFrame):
             success = False
             
         if success:
-            # write from dictionary to fields
-            self.apikey_frame_amnt.insert(tk.END, settings['API Key'])
-            self.model.set(0 if settings['Model'] == '3.5' else 1)
-            self.offline.set(1 if settings['Offline'] else 0)
-            self.context_cutoff_amnt.insert(tk.END, str(settings['ContextCut']))
+            try:
+                # write from dictionary to fields
+                self.apikey_frame_amnt.insert(tk.END, settings['API Key'])
+                self.model.set(0 if settings['Model'] == '3.5' else 1)
+                self.offline.set(1 if settings['Offline'] else 0)
+                self.context_cutoff_amnt.insert(tk.END, str(settings['ContextCut']))
+                self.batch_size.set(settings['Batch'])
+            except Exception as e:
+                # write from dictionary to fields
+                self.apikey_frame_amnt.insert(tk.END, settings['API Key'])
+                self.model.set(1)
+                self.offline.set(0)
+                self.context_cutoff_amnt.insert(tk.END, "0")
+                self.batch_size.set(5)
         
         # pack the main menu
         self.pack(expand=True, fill='both')
@@ -272,19 +291,9 @@ class MainMenu(ctk.CTkFrame):
                 return
         
         # test api key
-        try:
-            client = OpenAI(api_key=self.apikey_frame_amnt.get('1.0', 'end-1c'))
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "user", "content": "This is a test prompt, please respond with ONLY 'OK'"}
-                ]
-            )
-            result = response.choices[0].message.content
-        except Exception as e:
-            result = "FAIL"
+        valid_key = test_api_key(self.apikey_frame_amnt.get('1.0', 'end-1c'))
         
-        if not "OK" in result:
+        if not valid_key:
             if messagebox.askyesno("API Check!", "It appears the API key that you entered is invalid, would you like to reenter a new key? Otherwise you will continue in offline mode."):
                 return
             else:
@@ -297,7 +306,8 @@ class MainMenu(ctk.CTkFrame):
         settings = {'API Key':self.apikey_frame_amnt.get('1.0', 'end-1c'),
                     'Model':"3.5" if self.model.get() == 0 else "4.0",
                     'Offline':False if self.offline.get() == 0 else True,
-                    'ContextCut':self.context_cutoff_amnt.get('1.0', 'end-1c') if self.context_cutoff_amnt.get('1.0', 'end-1c').isdigit() else 50}  
+                    'ContextCut':self.context_cutoff_amnt.get('1.0', 'end-1c') if self.context_cutoff_amnt.get('1.0', 'end-1c').isdigit() else 50,
+                    'Batch':self.batch_size.get()}  
         
         # push settings information to the user path
         json_settings = json.dumps(settings, indent=4)
@@ -311,7 +321,7 @@ class MainMenu(ctk.CTkFrame):
         # create a datem object containing the domain and context for this quiz
         quiz_data = {}
         
-        # get the contents of the doman and context fields if they are not their hint texts
+        # get the contents of the domain and context fields if they are not their hint texts
         if not self.domain_entry.get('1.0', 'end-1c') == self.domain_hint_text and self.domain_entry.get('1.0', 'end-1c').strip() != "":
             quiz_data['Domain'] = self.domain_entry.get('1.0', 'end-1c')
         else:
