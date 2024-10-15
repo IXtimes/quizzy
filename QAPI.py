@@ -221,39 +221,17 @@ def get_image_embed_links_if_any(question):
     # return blank if no link is found
     return ""
 
-def get_unique_permutations_in_question(question, domain, context, api_key, model, t_results = None):
-    # generate MAX_THREADS permutations for the same question
-    threads = []
-    results = []
-    for i in range(REFINEMENT_THREADS):
-        threads.append(threading.Thread(target=seed_permutations_in_question, args=(question, domain, context, api_key, model, results)))
-        threads[i].start()
-        time.sleep(0.5)
-    for i in range(REFINEMENT_THREADS):
-        threads[i].join()
-        
-    # using the results array garnered, log and remove all duplicate results
-    duplicates = []
-    for i in range(len(results) - 1):
-        if results[i] in results[i+1:]:
-            if not results[i] in duplicates:
-                duplicates.append(results[i])
-                
-    # return the list of unique results
-    unique_datems = [result for result in results if result not in duplicates]
-    if t_results is None:
-        return unique_datems[random.randint(0, len(unique_datems) - 1)]
-    else:
-        t_results.append(unique_datems[random.randint(0, len(unique_datems) - 1)])
-
 def seed_permutations_in_question(question, domain, context, api_key, model, t_results = None):
     # First retrieve an image embed if it exists
     img_link = get_image_embed_links_if_any(question)
     
     # Split the question content into chunks to search for the first img embed
     embeds = question.split('```')
-    cut_segment = []
-    blank_question = ""
+    
+    # Keep references for 2 seperate lists:
+    segments = [] # Segments of the completed final string
+    blank_defaults = [] # The original values of blanks, as well as the "type" of permutateable part they are
+    blanks = [] # The blanks to slowly use to guide GPT to constructing a permutated question
     
     for i, chunk in enumerate(embeds):
         if i % 2 != 0:
@@ -261,43 +239,67 @@ def seed_permutations_in_question(question, domain, context, api_key, model, t_r
             header = chunk.split(':')[0]
             if header == "prt":
                 # this is a permutatable part, get the original text and add it to the cut segment
-                cut_segment.append(chunk[4:])
-                blank_question += "_" * len(chunk)
+                blank_defaults.append((chunk[4:], "reg"))
+                blanks.append("_" * len(chunk))
+            elif header == "mathprt":
+                # this is a MATH permutatable part, signify this in the tuple, otherwise its the same as a prt segment
+                blank_defaults.append((chunk[8:], "math"))
+                blanks.append("_" * len(chunk))
             else:
                 # readd embed markings if not an image embed
                 if not chunk.startswith("img:"):
-                    blank_question += "```" + chunk + "```"
+                    segments.append("```" + chunk + "```")
         else:
-            # push chunk back to question string
-            blank_question += chunk
+            # log segment as is
+            segments.append(chunk)
                     
-    # prompt to fill in the blanks of the question to generate a whole new question
+    # initalize client and domain/context segments
     client = OpenAI(api_key=api_key)
     domain_c = "Domain: " + domain + "\n"
     context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
     model_c = "gpt-4o-mini" if model == '3.5' else "gpt-4o"
-    question_c = blank_question + "\n"
-    seed = rand.generate_random_number()
     
-    response = client.chat.completions.create (
-        model = model_c,
-        presence_penalty= 2,
-        seed= seed,
-        messages = [
-            {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_FILL_IN_BLANKS + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-            {
-                "role":"user",
-                "content": [
-                    {"type": "text", "text": domain_c + context_c + question_c + REQUEST_FILL_IN_BLANKS},
-                    {"type": "image_url", "image_url": {
-                        "url": img_link
-                    }} 
-                ] if img_link != "" else [
-                    {"type": "text", "text": domain_c + context_c + question_c + REQUEST_FILL_IN_BLANKS}
-                ]
-            }
-        ]
-    )
+    # iterate getting responses from our client to fill in the blanks as they appear.
+    # blanks already filled are considered a singular segment, the current blank appears blank and is requested to be filled, where all remaining blanks are filled with their default values.
+    while not len(blanks) == 0:
+        # sew a question together consisting of a blank where it first sees fit (between the first and second segment), followed by the remaining segments joined using the original default values as they appear
+        question_c = ""
+        comb_segments = (segments.pop(0), segments.pop(0))
+        cur_blank = blank_defaults.pop(0)
+        question_c = comb_segments[0] + blanks.pop(0) + comb_segments[1]
+        for i, def_blank in enumerate(blank_defaults):
+            if i < len(segments):
+                question_c += def_blank[0] + segments[i]
+            else:
+                question_c += def_blank[0]
+    
+        # prompt the GPT to fill in the blank
+        response = client.chat.completions.create (
+            model = model_c,
+            presence_penalty= 2,
+            messages = [
+                {"role": "system", "content": SYSTEM_INTRO + (REQUEST_EXAMPLE_FILL_IN_BLANKS if cur_blank[1] == "reg" else REQUEST_EXAMPLE_FILL_IN_MATH) + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
+                {
+                    "role":"user",
+                    "content": [
+                        {"type": "text", "text": domain_c + context_c + question_c + REQUEST_FILL_IN_BLANKS},
+                        {"type": "image_url", "image_url": {
+                            "url": img_link
+                        }} 
+                    ] if img_link != "" else [
+                        {"type": "text", "text": domain_c + context_c + question_c + REQUEST_FILL_IN_BLANKS}
+                    ]
+                }
+            ]
+        )
+        
+        segments.insert(0, comb_segments[0] + cur_blank[0] + comb_segments[1])
+        
+        print(response.choices[0].message.content.split('\n'))
+        
+        print(segments, blank_defaults, blanks)
+    
+    return
     
     # parse the contents returned by the AI
     try:
@@ -405,7 +407,7 @@ if __name__ == "__main__":
                 results = []
                 while n > 0:
                     for i in range(MAX_THREADS if n // MAX_THREADS > 0 else n):
-                        threads.append(threading.Thread(target=get_unique_permutations_in_question, args=(question["Question"], domain, context, api_key, model, results)))
+                        threads.append(threading.Thread(target=seed_permutations_in_question, args=(question["Question"], domain, context, api_key, model, results)))
                         threads[i].start()
                         time.sleep(1)
                     for i in range(MAX_THREADS if n // MAX_THREADS > 0 else n):

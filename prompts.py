@@ -28,16 +28,32 @@ REQUEST_EXAMPLE_ALL_CHOICES = """- A question followed by a request for answer c
                                         I~ Deployment"""
 REQUEST_ALL_CHOICES = "Please provide answer choices for THIS question"
 
-REQUEST_EXAMPLE_FILL_IN_BLANKS = """- A question with blanks followed by a request to fill in those blanks per the order they appear in the question. The way the blanks are filled MUST make since according to the context and domain in addition to the context of the question itself (specify EXACTLY enough choices to fill in ALL blanks):
-                                        (When generating your response, CLOSELY MATCH THE LENGTH OF THE BLANK THAT IS BEING FILLED, AVOID COMMON PATTERNS)
+REQUEST_EXAMPLE_FILL_IN_BLANKS = """- A question with a blank followed by a request to fill in that blank. How you fill the blank MUST make since according to the context and domain in addition to the context of the question itself:
+                                    Provide FIVE UNIQUE options to fill in the blank. Your responses should VERY CLOSELY match the length of the blank in the question! DO NOT enumerate output
                                         - Ex. output 1 for the question: "Which of the following choices shows the set: {____________} sorted in descending order":
-                                            0~ 4, 9, 34, 7
-                                        - Ex. output 2 for the question: "Which of the following choices shows the set: {_, _, _, _} sorted in descending order":
-                                            0~ 4
-                                            1~ 7
-                                            2~ 10
-                                            3~ 6
-                                        - Ex. output 3 for the question: "Which of the following choices shows the set: {_____________} sorted in __________ order":
-                                            0~ 62, 83, 4, 23
-                                            1~ ascending"""
-REQUEST_FILL_IN_BLANKS = "Please provide what should fill in the blanks for THIS question"
+                                            4, 9, 34, 7, 7
+                                            23, 85, 3, 85
+                                            7, 1, 0
+                                            10, 56, 99, 6, 74, 33
+                                            69, 4, 20
+                                        - Ex. output 2 for the question: "Which of the following choices shows the set: {4, 9, 34, 7} sorted in __________ order":
+                                            ascending
+                                            descending
+                                            lexicographical
+                                            numerical
+                                            random"""
+REQUEST_EXAMPLE_FILL_IN_MATH = """- A question with a blank followed by a request to fill in that blank. How you fill the blank MUST make since according to the context and domain in addition to the context of the question itself:
+                                    Provide FIVE UNIQUE options to fill in the blank. Your responses MUST be in a LaTEX math format, as you will be specifying mathematical quantities! The math that you generate should be reasonably solvable for the student in the context of what the question requests. DO NOT enumerate output
+                                        - Ex. output 1 for the question: "Find the zeros for the following polynomial: ____________":
+                                            x^2 - 5x + 6
+                                            x^2 - 9
+                                            x^2 + 3x
+                                            2x^2 - 8x + 6
+                                            x^2 - 4x - 12
+                                        - Ex. output 2 for the question: "Solve the following trigonometric finite integral for its solution: ____________":
+                                            \int_{0}^{\frac{\pi}{2}} \sin(x) \, dx
+                                            \int_{0}^{\frac{\pi}{4}} \cos(x) \, dx
+                                            \int_{0}^{\frac{\pi}{2}} \sin^2(x) \, dx
+                                            \int_{0}^{\frac{\pi}{2}} \cos^2(x) \, dx
+                                            \int_{0}^{\frac{\pi}} \sin(x) \cos(x) \, dx"""
+REQUEST_FILL_IN_BLANKS = "Please provide FIVE UNIQUE options to fill in the blank for this question."
