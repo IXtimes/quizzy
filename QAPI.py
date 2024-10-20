@@ -293,39 +293,28 @@ def seed_permutations_in_question(question, domain, context, api_key, model, t_r
             ]
         )
         
-        segments.insert(0, comb_segments[0] + cur_blank[0] + comb_segments[1])
-        
-        print(response.choices[0].message.content.split('\n'))
+        try:
+            # pick the option that is CLOSEST to the length of the blank
+            options = response.choices[0].message.content.split('\n')
+            distances = list(map(lambda x: abs(len(x.strip()) - len(cur_blank)), options))
+            print(options)
+            best_option = min(enumerate(distances), key=lambda x: x[1])[0]
+
+            segments.insert(0, comb_segments[0] + options[best_option].strip() + comb_segments[1])
+        except Exception as e:
+            print("Failed call to GPT!")
+            if t_results is None:
+                return None
+            else:
+                t_results.append(None)
         
         print(segments, blank_defaults, blanks)
     
-    return
-    
-    # parse the contents returned by the AI
-    try:
-        # cleanup the output
-        lines = response.choices[0].message.content.split('\n')
-        fills = []
-        for i, line in enumerate(lines):
-            # remove header tag and strip misc whitespace
-            fills.append(line.strip()[(3 + i // 10):])
-            
-        # reparse the question with the blanks filled
-        q_parts = re.split(r'_+', blank_question)
-        complete_question = ""
-        for part in q_parts:
-            complete_question += part + (fills.pop(0) if len(fills) > 0 else "")
-        
-        if t_results is None:
-            return complete_question
-        else:
-            t_results.append(complete_question)
-    except Exception as e:
-        print("Failed call to GPT!")
-        if t_results is None:
-            return None
-        else:
-            t_results.append(None)
+    # return the results, or push results to threads
+    if t_results is None:
+        return segments[0]
+    else:
+        t_results.append(segments[0])
     
 def generate_explaination_for_question(question, domain, context, api_key):
     # test api key
