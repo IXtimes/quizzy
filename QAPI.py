@@ -13,22 +13,12 @@ CONTEXT_CUTOFF = 500
 MAX_THREADS = 5
 REFINEMENT_THREADS = 5
 
-class RandomNumberGenerator:
-    def __init__(self):
-        self.lock = threading.Lock()
-
-    def generate_random_number(self):
-        with self.lock:
-            random_number = random.randint(1, 999999)
-            return random_number
-
-rand = RandomNumberGenerator()
-
 def get_driver_function():
     print('''Select a driver function: 
           \t1. Test API Key
-          \t2. Generate new question based off permutation
-          \t3. Exit''')
+          \t2. Write new question and auto-complete for missing content
+          \t3. Generate new question based off permutation
+          \t4. Exit''')
     return int(input("?: "))
 
 def construct_question_object(type, question = None, q_index = None, correct_answers = None, incorrect_answers = None, terms = None, guidelines = None, format = None, language = None, forced = None, explaination = None):
@@ -50,15 +40,15 @@ def construct_question_object(type, question = None, q_index = None, correct_ans
             built_question['Type'] = "MC"
             
             # iterate and add the correct answers and incorrect answers
-            for i, content in enumerate(correct_answers):
+            for i, content in enumerate(correct_answers, 1):
                 built_question["C" + str(i)] = content
-            for i, content in enumerate(incorrect_answers):
+            for i, content in enumerate(incorrect_answers, 1):
                 built_question["A" + str(i)] = content
         case "Term-Definition":
             built_question['Type'] = "TD"
             
             # iterate over term definition pairs and add them to the question
-            for i, (term, definition) in enumerate(terms):
+            for i, (term, definition) in enumerate(terms, 1):
                 built_question["T" + str(i)] = term
                 built_question["D" + str(i)] = definition
         case "Essay":
@@ -221,12 +211,303 @@ def get_image_embed_links_if_any(question):
     # return blank if no link is found
     return ""
 
-def seed_permutations_in_question(question, domain, context, api_key, model, t_results = None):
+def generate_permutation_from_question(question, domain, context, api_key, model, t_results = None):
+    # create a new question object
+    new_question = {}
+    
+    # seed the question text with generated permutations (permutation questions dont have an index as they are not saved)
+    new_question['Q'] = str(-1)
+    new_question['Forced'] = str(1)
+    new_question['Question'] = seed_permutations_in_question(question["Question"], domain, context, api_key, model)
+    new_question['Type'] = question['Type']
+
+    # from the new question header text, generate new answer choices that emulate the same pattern as the input
+    match new_question['Type']:
+        case "MC":
+            fill_multiple_choice_options(new_question, domain, context, api_key, model)
+        case 'TD':
+            print("Not implemented")
+        case 'Ess':
+            print("Not implemented")
+
+    # finally, generate the explaination for the question.
+    generate_explaination_for_question(new_question, domain, context, api_key, model)
+
+    # push results to threads, otherwise return
+    if t_results is None:
+        return new_question
+    else:
+        t_results.append(new_question)
+
+def fill_multiple_choice_options(question, domain, context, api_key, model):
     # First retrieve an image embed if it exists
-    img_link = get_image_embed_links_if_any(question)
+    img_link = get_image_embed_links_if_any(question["Question"])
+
+    # initalize client and domain/context segments
+    client = OpenAI(api_key=api_key)
+    domain_c = "Domain: " + domain + "\n"
+    context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
+    model_c = "gpt-4o-mini" if model == '3.5' else "gpt-4o"
+
+    # Determine what parts of the question we are missing
+    # Generate the correct answer(s) and incorrect answer(s) if both are (effectively) missing
+    if not "C1" in question.keys() and (not "A1" in question.keys() or ("A1" in question.keys() and not "A2" in question.keys())) :
+        # Get the response from the GPT
+        response = client.chat.completions.create (
+            model = model_c,
+            messages = [
+                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_ALL_CHOICES + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
+                {
+                    "role":"user",
+                    "content": [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_ALL_CHOICES + remove_backticked_imbeds(question["Question"])},
+                        {"type": "image_url", "image_url": {
+                            "url": img_link
+                        }} 
+                    ] if img_link != "" else [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_ALL_CHOICES + remove_backticked_imbeds(question["Question"])}
+                    ]
+                }
+            ]
+        )
+
+        # Parse to get the correct and incorrect answers generated
+        try:
+            # iterate through the output
+            lines = response.choices[0].message.content.split('\n')
+            cur_key = ""
+            num_cor = 0
+            num_incor = 0 if not "A1" in question.keys() else 1
+            for line in lines:
+                # check if this line contains a correct answer
+                if line.strip().startswith('C~'):
+                    # get the new key
+                    num_cor += 1
+                    cur_key = "C" + str(num_cor)
+                    
+                    # set this line into the question dictionary
+                    question[cur_key] = line[2:].strip()
+                # check if this line contains a incorrect answer
+                elif line.strip().startswith('I~'):
+                    # get the new key
+                    num_incor += 1
+                    cur_key = "A" + str(num_incor)
+                    
+                    # set this line into the question dictionary
+                    question[cur_key] = line[2:].strip()
+                # otherwise is continuation of previous line
+                else:
+                    # if we enter here without a key, something went wrong
+                    if cur_key == "":
+                        raise Exception()
+                    
+                    # append this line to the previous on a newline
+                    question[cur_key] = "\n" + line.strip()
+        except Exception as e:
+            # prompt error and prevent submit
+            print("Failed call to GPT!")
+        
+            return
+        
+    
+    # generate several incorrect answers if they are missing for several correct answers
+    elif "C2" in question.keys() and not "A1" in question.keys():
+        # get the required content for the prompt
+        correct_answers_c = "Correct Answers: "
+        correct_count = 0
+        for key, value in question.items():
+            if "C" in key:
+                correct_answers_c += value + ", "
+                correct_count += 1
+        content = "Question: " + remove_backticked_imbeds(question['Question']) + "\n" + remove_backticked_imbeds(correct_answers_c) + "\n"
+
+        # Get the response from the GPT
+        response = client.chat.completions.create (
+            model = model_c,
+            messages = [
+                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_INCORRECT_CHOICES_MULTIPLE_CORRECT + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
+                {
+                    "role":"user",
+                    "content": [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_INCORRECT_CHOICES_MULTIPLE_CORRECT.replace("{X}", str(correct_count)) + content},
+                        {"type": "image_url", "image_url": {
+                            "url": img_link
+                        }} 
+                    ] if img_link != "" else [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_INCORRECT_CHOICES_MULTIPLE_CORRECT.replace("{X}", str(correct_count)) + content}
+                    ]
+                }
+            ]
+        )
+
+        # Parse to get the correct and incorrect answers generated
+        try:
+            # iterate through the output
+            lines = response.choices[0].message.content.split('\n')
+            cur_key = ""
+            num_cor = 0
+            num_incor = 0
+            for line in lines:
+                # check if this line contains a incorrect answer
+                if line.strip().startswith('I~'):
+                    # get the new key
+                    num_incor += 1
+                    cur_key = "A" + str(num_incor)
+                    
+                    # set this line into the question dictionary
+                    question[cur_key] = line[2:].strip()
+                # otherwise is continuation of previous line
+                else:
+                    # if we enter here without a key, something went wrong
+                    if cur_key == "":
+                        raise Exception()
+                    
+                    # append this line to the previous on a newline
+                    question[cur_key] = "\n" + line.strip()
+        except Exception as e:
+            # prompt error and prevent submit
+            print("Failed call to GPT!")
+        
+            return
+        
+    # select a correct answer from the incorrect answers if enough incorrect answers are given.
+    elif not "C1" in question.keys() and "A2" in question.keys():
+        # First, generate the additional content
+        answer_choices_c = "Answer Choices:\n"
+        choice_num = 1
+        for key, value in question.items():
+            if "A" in key:
+                answer_choices_c += "A" + str(choice_num) + "~ " + value + "\n"
+                choice_num += 1
+        content = "Question: " + remove_backticked_imbeds(question['Question']) + "\n" + answer_choices_c + "\n"
+
+        # Get the response from the GPT
+        response = client.chat.completions.create (
+            model = model_c,
+            messages = [
+                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_SELECT_CORRECT_CHOICE + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
+                {
+                    "role":"user",
+                    "content": [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_SELECT_CORRECT_CHOICE + content},
+                        {"type": "image_url", "image_url": {
+                            "url": img_link
+                        }} 
+                    ] if img_link != "" else [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_SELECT_CORRECT_CHOICE + content}
+                    ]
+                }
+            ]
+        )
+
+        choices = []
+
+        # parse
+        print(response.choices[0].message.content.split('\n'))
+        choice_num = 0
+        for key, value in question.items():
+            if "A" in key:
+                choices.append(value)
+                choice_num += 1
+        while choice_num > 0:
+            del question["A" + str(choice_num)]
+            choice_num -= 1
+
+        # Parse to get the correct and incorrect answers generated
+        try:
+            # iterate through the output
+            lines = response.choices[0].message.content.split(',')
+            cur_key = ""
+            choice_num = len(lines)
+            for i in range(len(lines) - 1, -1, -1):
+                line = lines[i]
+                # validate this choice
+                if line.strip().startswith('A'):
+                    # get the new key
+                    cur_key = "C" + str(choice_num)
+                    choice_num -= 1
+                    
+                    # set this line into the question dictionary
+                    answer = int(line.strip()[1])
+                    question[cur_key] = choices.pop(answer - 1)
+
+                # otherwise is continuation of previous line
+                else:
+                    # if we enter here, we have a problem
+                    raise Exception()
+        except Exception as e:
+            # prompt error and prevent submit
+            print("Failed call to GPT!: " + str(e))
+        
+            return
+        
+        # push the remainder of the list as incorrect answer choices
+        choice_num = 1
+        for item in choices:
+            question["A" + str(choice_num)] = item
+            choice_num += 1
+
+        
+    # generate incorrect answers if they are missing for a single correct answer
+    elif "C1" in question.keys() and not "A1" in question.keys():
+        # first, generate additional content
+        content = "Question: " + remove_backticked_imbeds(question["Question"]) + "\nCorrect Answer: " + remove_backticked_imbeds(question["C1"]) + "\n"
+
+        # Get the response from the GPT
+        response = client.chat.completions.create (
+            model = model_c,
+            messages = [
+                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_INCORRECT_CHOICES_SINGLE_CORRECT + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
+                {
+                    "role":"user",
+                    "content": [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_INCORRECT_CHOICES_SINGLE_CORRECT + content},
+                        {"type": "image_url", "image_url": {
+                            "url": img_link
+                        }} 
+                    ] if img_link != "" else [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_INCORRECT_CHOICES_SINGLE_CORRECT + content}
+                    ]
+                }
+            ]
+        )
+
+        # Parse to get the correct and incorrect answers generated
+        try:
+            # iterate through the output
+            lines = response.choices[0].message.content.split('\n')
+            cur_key = ""
+            num_cor = 0
+            num_incor = 0
+            for line in lines:
+                # check if this line contains a incorrect answer
+                if line.strip().startswith('I~'):
+                    # get the new key
+                    num_incor += 1
+                    cur_key = "A" + str(num_incor)
+                    
+                    # set this line into the question dictionary
+                    question[cur_key] = line[2:].strip()
+                # otherwise is continuation of previous line
+                else:
+                    # if we enter here without a key, something went wrong
+                    if cur_key == "":
+                        raise Exception()
+                    
+                    # append this line to the previous on a newline
+                    question[cur_key] = "\n" + line.strip()
+        except Exception as e:
+            # prompt error and prevent submit
+            print("Failed call to GPT!")
+        
+            return
+
+def seed_permutations_in_question(question_text, domain, context, api_key, model):
+    # First retrieve an image embed if it exists
+    img_link = get_image_embed_links_if_any(question_text)
     
     # Split the question content into chunks to search for the first img embed
-    embeds = question.split('```')
+    embeds = question_text.split('```')
     
     # Keep references for 2 seperate lists:
     segments = [] # Segments of the completed final string
@@ -240,11 +521,11 @@ def seed_permutations_in_question(question, domain, context, api_key, model, t_r
             if header == "prt":
                 # this is a permutatable part, get the original text and add it to the cut segment
                 blank_defaults.append((chunk[4:], "reg"))
-                blanks.append("_" * len(chunk))
+                blanks.append("_" * len(chunk[4:]))
             elif header == "mathprt":
                 # this is a MATH permutatable part, signify this in the tuple, otherwise its the same as a prt segment
                 blank_defaults.append((chunk[8:], "math"))
-                blanks.append("_" * len(chunk))
+                blanks.append("_" * len(chunk[8:]))
             else:
                 # readd embed markings if not an image embed
                 if not chunk.startswith("img:"):
@@ -272,6 +553,7 @@ def seed_permutations_in_question(question, domain, context, api_key, model, t_r
                 question_c += def_blank[0] + segments[i]
             else:
                 question_c += def_blank[0]
+        size_c = "Please respond with options that are approximately " + str(len(cur_blank[0])) + " characters in length"
     
         # prompt the GPT to fill in the blank
         response = client.chat.completions.create (
@@ -282,12 +564,12 @@ def seed_permutations_in_question(question, domain, context, api_key, model, t_r
                 {
                     "role":"user",
                     "content": [
-                        {"type": "text", "text": domain_c + context_c + question_c + REQUEST_FILL_IN_BLANKS},
+                        {"type": "text", "text": domain_c + context_c + size_c + REQUEST_FILL_IN_BLANKS + remove_backticked_imbeds(question_text) + question_c},
                         {"type": "image_url", "image_url": {
                             "url": img_link
                         }} 
                     ] if img_link != "" else [
-                        {"type": "text", "text": domain_c + context_c + question_c + REQUEST_FILL_IN_BLANKS}
+                        {"type": "text", "text": domain_c + context_c + size_c + REQUEST_FILL_IN_BLANKS + question_c}
                     ]
                 }
             ]
@@ -296,39 +578,66 @@ def seed_permutations_in_question(question, domain, context, api_key, model, t_r
         try:
             # pick the option that is CLOSEST to the length of the blank
             options = response.choices[0].message.content.split('\n')
-            distances = list(map(lambda x: abs(len(x.strip()) - len(cur_blank)), options))
-            print(options)
+            distances = list(map(lambda x: abs(len(x.strip()) - len(cur_blank[0])), options))
             best_option = min(enumerate(distances), key=lambda x: x[1])[0]
 
-            segments.insert(0, comb_segments[0] + options[best_option].strip() + comb_segments[1])
+            if cur_blank[1] == "reg":
+                segments.insert(0, comb_segments[0] + options[best_option].strip() + comb_segments[1])
+            else:
+                segments.insert(0, comb_segments[0] + "```math:" + options[best_option].strip() + "```" + comb_segments[1])
         except Exception as e:
             print("Failed call to GPT!")
-            if t_results is None:
-                return None
-            else:
-                t_results.append(None)
-        
-        print(segments, blank_defaults, blanks)
+            return None
+
+    # return the results
+    return segments[0]
     
-    # return the results, or push results to threads
-    if t_results is None:
-        return segments[0]
-    else:
-        t_results.append(segments[0])
-    
-def generate_explaination_for_question(question, domain, context, api_key):
-    # test api key
+def generate_explaination_for_question(question, domain, context, api_key, model):
+    # First retrieve an image embed if it exists
+    img_link = get_image_embed_links_if_any(question["Question"])
+
+    # initalize client and domain/context segments
+    client = OpenAI(api_key=api_key)
+    domain_c = "Domain: " + domain + "\n"
+    context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
+    model_c = "gpt-4o-mini" if model == '3.5' else "gpt-4o"
+
+    # get the required content for the prompt
+    correct_answers_c = "Correct Answers: "
+    for key, value in question.items():
+        if "C" in key:
+            correct_answers_c += value + ", "
+    content = "Question: " + remove_backticked_imbeds(question['Question']) + "\n" + remove_backticked_imbeds(correct_answers_c) + "\n"
+
+    # prompt the GPT to write the explaination
+    response = client.chat.completions.create (
+        model = model_c,
+        presence_penalty= 2,
+        messages = [
+            {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_EXPLAINATIONS + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
+            {
+                "role":"user",
+                "content": [
+                    {"type": "text", "text": domain_c + context_c + REQUEST_EXPLAINATIONS + content},
+                    {"type": "image_url", "image_url": {
+                        "url": img_link
+                    }} 
+                ] if img_link != "" else [
+                    {"type": "text", "text": domain_c + context_c + REQUEST_EXPLAINATIONS + content}
+                ]
+            }
+        ]
+    )
+
+    # wrap in try/except to flag an error if the api fails
     try:
-        client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "user", "content": "This is a test prompt, please respond with ONLY 'OK'"}
-            ]
-        )
-        result = response.choices[0].message.content
+        # push to explaination
+        question['Explaination'] = response.choices[0].message.content[2:].strip()
     except Exception as e:
-        return False
+        # prompt error and prevent submit
+        print("Failed call to GPT!")
+    
+        return
 
 def test_api_key(api_key):
     # test api key
@@ -391,12 +700,25 @@ if __name__ == "__main__":
                 print("API key is valid!" if test_api_key(api_key) else "API key is INVALID!")
             case 2:
                 question = get_question_from_user_input(0)
+                match question['Type']:
+                    case 'MC':
+                        fill_multiple_choice_options(question, domain, context, api_key, model)
+                    case 'TD':
+                        print("Not implemented")
+                    case 'Ess':
+                        print("Not implemented")
+
+                generate_explaination_for_question(question, domain, context, api_key, model)
+
+                print(question)
+            case 3:
+                question = get_question_from_user_input(0)
                 n = int(input("How many questions do you wish to generate? "))
                 threads = []
                 results = []
                 while n > 0:
                     for i in range(MAX_THREADS if n // MAX_THREADS > 0 else n):
-                        threads.append(threading.Thread(target=seed_permutations_in_question, args=(question["Question"], domain, context, api_key, model, results)))
+                        threads.append(threading.Thread(target=generate_permutation_from_question, args=(question, domain, context, api_key, model, results)))
                         threads[i].start()
                         time.sleep(1)
                     for i in range(MAX_THREADS if n // MAX_THREADS > 0 else n):
@@ -406,5 +728,5 @@ if __name__ == "__main__":
                     threads.clear()
                     results.clear()
                     n -= MAX_THREADS
-            case 3:
+            case 4:
                 driver_loop = False

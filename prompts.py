@@ -26,18 +26,68 @@ REQUEST_EXAMPLE_ALL_CHOICES = """- A question followed by a request for answer c
                                         C~ Physical
                                         I~ Conceptual
                                         I~ Deployment"""
-REQUEST_ALL_CHOICES = "Please provide answer choices for THIS question"
+REQUEST_ALL_CHOICES = "Please provide answer choices for THIS question\n"
+REQUEST_EXAMPLE_INCORRECT_CHOICES_SINGLE_CORRECT = """- A question with a single correct answer, followed by a request for INCORRECT answer choices. You are to provide exactly 3 other incorrect answer choices that may trick the student into picking them, but should NOT be ambiguous to that of the correct answer:
+                                    - Ex. output, Question: "The conceptual view of a system's architecture is primarily used for:", Correct Answer: "Stakeholder communication"
+                                        I~ Performance analysis
+                                        I~ Implementation
+                                        I~ Detailed design"""
+REQUEST_INCORRECT_CHOICES_SINGLE_CORRECT = "Please provide incorrect answer choices for THIS question\n"
+REQUEST_EXAMPLE_INCORRECT_CHOICES_MULTIPLE_CORRECT = """- A question with a multiple correct answers, followed by a request for INCORRECT answer choices. You are to provide exactly AS MANY incorrect answers as there are correct answers:
+                                    - Ex. output 1, Question: "The 4+1 view model proposed by Krutchen includes which of the following views?", Correct Answers: "Logical; Process; Development; Physical"
+                                        I~ Conceptual
+                                        I~ Deployment
+                                        I~ Architectural
+                                        I~ Datapath
+                                    - Ex. output 2, Question: "In a model-based development process, system models are used to:", Correct Answers: "Generate code; Document the system; Stimulate discussion"
+                                        I~ Read Code
+                                        I~ Explore possible system architectures
+                                        I~ Isolate plans"""
+REQUEST_INCORRECT_CHOICES_MULTIPLE_CORRECT = "Please provide {X} incorrect answer choices for THIS question\n"
+REQUEST_EXAMPLE_SELECT_CORRECT_CHOICE = """- A question and several answer choices, followed by a request to SELECT the CORRECT answer choice(s). You are to ONLY specify the PREFIX of the selected choice(s):
+                                    If only a single answer choice appears to be correct, then only select the PREFIX of the choice.
+                                    If you suspect that multiple answer choices can be correct, then you make select multiple answer choices that are COMMA SEPERATED. ONLY DO THIS when you TRUELY believe that 2+ answer choices apply. You may select all answer choices if you feel that they are all correct.
+                                    - PROMPT: "The conceptual view of a system's architecture is primarily used for:
+                                        A1~ Performance analysis
+                                        A2~ Stakeholder communication
+                                        A3~ Implementation
+                                        A4~ Detailed design"
+                                    RESPONSE: "A2"
+                                    - PROMPT: "The Client-Server pattern is a conceptual organization pattern.:
+                                        A1~ True
+                                        A2~ False"
+                                    RESPONSE: "A1"
+                                    - PROMPT: "The 4+1 view model proposed by Krutchen includes which of the following views?:
+                                        A1~ Logical
+                                        A2~ Conceptual
+                                        A3~ Development
+                                        A4~ Physical
+                                        A5~ Process
+                                        A6~ Deployment"
+                                    RESPONSE: "A1, A3, A4, A5" 
+                                    NOTE: FOR THESE EXAMPLES. Your output should be VERY SHORT"""
+REQUEST_SELECT_CORRECT_CHOICE = "Please select the correct answer choice from the following for THIS question\n"
 
-REQUEST_EXAMPLE_FILL_IN_BLANKS = """- A question with a blank followed by a request to fill in that blank. How you fill the blank MUST make since according to the context and domain in addition to the context of the question itself:
-                                    Provide FIVE UNIQUE options to fill in the blank. Your responses should VERY CLOSELY match the length of the blank in the question! DO NOT enumerate output
-                                        - Ex. output 1 for the question: "Which of the following choices shows the set: {____________} sorted in descending order":
+REQUEST_EXAMPLE_EXPLAINATIONS = """- A question followed by its correct answer(s) (provide the explaination for why the correct answer is correct in the context of the question).
+                                    - Ex. output:
+                                        E~ A heap is a data structure used for collections where the maximal or minimal element is frequently accessed from the collection, as it performs this operations in near constant time, so a heap would be the best data structure for implementing A* pathfinding.
+
+                                For your explaination, make sure it is INSIGHTFUL and HELPFUL for the student, DO NOT USE ELEMENTS OF THE QUESTION OR ANSWERS WORD FOR WORD IN YOUR RESPONSE.
+                                Since your output will be fed directly to a program to be parsed, you MUST be STRICT with what you output, and be as BRIEF as possible. for ALL outputs, your responses MUST ADHERE TO THE ABOVE FORMAT NO MATTER WHAT"""
+REQUEST_EXPLAINATIONS = request = "Please provide the explaination for why the correct answers are correct in the context of THIS question\n"
+
+REQUEST_EXAMPLE_FILL_IN_BLANKS = """- A question, and the same question with a blank followed by a request to fill in that blank with a UNIQUE response. How you fill the blank MUST make since according to the context and domain in addition to the context of the question itself:
+                                    Provide FIVE UNIQUE options to fill in the blank. DO NOT enumerate output
+                                        - Ex. output 1 for the questions: "Which of the following choices shows the set: {4, 9, 34, 7} sorted in descending order"
+                                        "Which of the following choices shows the set: {____________} sorted in descending order":
                                             4, 9, 34, 7, 7
                                             23, 85, 3, 85
                                             7, 1, 0
                                             10, 56, 99, 6, 74, 33
                                             69, 4, 20
-                                        - Ex. output 2 for the question: "Which of the following choices shows the set: {4, 9, 34, 7} sorted in __________ order":
-                                            ascending
+                                        - Ex. output 2 for the question: "Which of the following choices shows the set: {4, 9, 34, 7} sorted in ascending order"
+                                        "Which of the following choices shows the set: {4, 9, 34, 7} sorted in __________ order":
+                                            hexadecimal
                                             descending
                                             lexicographical
                                             numerical
