@@ -176,7 +176,7 @@ class Builder(ctk.CTkFrame):
                 # update save path
                 self.filepath = file_path
             else:
-                messagebox.showerror("Unkown?", "There was an issue saving this deck to that location!")
+                messagebox.showerror("Unknown?", "There was an issue saving this deck to that location!")
                 self.filepath = ""
                 return False
                 
