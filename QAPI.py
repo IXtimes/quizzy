@@ -285,17 +285,17 @@ def get_question_from_user_input(index, force_valid_input = False):
             pair_count = 0
             while True:
                 term = input("Enter a term: (or SKIP to skip this field) ")
-                if not term == "SKIP" and not force_valid_input:
+                if (term != "SKIP" and term != "") and not force_valid_input:
                     definition = input("Enter that term's definition: (or SKIP to skip this field) ")
                     if not force_valid_input:
-                        pairs.append((term, definition if not definition == "SKIP" else ""))
+                        pairs.append((term, definition if definition != "SKIP" and definition != "" else ""))
                         pair_count += 1
                 elif not force_valid_input:
                     definition = input("Enter a definition for whom we are missing the term: (or SKIP to move on) ")
-                    if definition == "SKIP":
+                    if definition == "SKIP" or definition == "":
                         break
                     pairs.append(("", definition))
-                elif force_valid_input and incorrect_count < 1:
+                elif force_valid_input and pair_count > 0:
                     if input("Please enter CONTINUE if you wish to move on: ") == "CONTINUE":
                         break
                     
@@ -388,7 +388,7 @@ def generate_permutation_from_question(question, domain, context, api_key, model
         case "MC":
             fill_multiple_choice_options(new_question, domain, context, api_key, model)
         case 'TD':
-            print("Not implemented")
+            fill_matching_options(new_question, False, domain, context, api_key, model)
         case 'Ess':
             print("Not implemented")
 
@@ -402,56 +402,219 @@ def generate_permutation_from_question(question, domain, context, api_key, model
         t_results.append(new_question)
 
 def unscramble_matching(question, domain, context, api_key, model):
-    pass
-
-def fill_matching_options(question, scrambled, domain, context, api_key, model):
     # First retrieve an image embed if it exists
     img_link = get_image_embed_links_if_any(question["Question"])
-
+    
+    # get the list of terms and definitions for appropriate matching
+    pair_count = sum(1 for key in question if key.startswith("D"))
+    terms = []
+    definitions = []
+    for i in range(pair_count):
+        terms += [question["T" + str(i + 1)]]
+        definitions += [question["D" + str(i + 1)]]
+        
     # initalize client and domain/context segments
     client = OpenAI(api_key=api_key)
     domain_c = "Domain: " + domain + "\n"
     context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
     model_c = "gpt-4o-mini" if model == '3.5' else "gpt-4o"
+    
+    # have the GPT unscramble the term-definition pairs
+    response = client.chat.completions.create (
+        model = model_c,
+        messages = [
+            {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_UNSCRAMBLE + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
+            {
+                "role":"user",
+                "content": [
+                    {"type": "text", "text": domain_c + context_c + REQUEST_UNSCRAMBLE + "Question: " + remove_backticked_imbeds(question["Question"]) + "Terms: " + "\n".join([f"{i + 1}. {term}" for i, term in enumerate(terms)]) + "\nDefinitions: " + "\n".join([f"{i + 1}. {defin}" for i, defin in enumerate(definitions)])},
+                    {"type": "image_url", "image_url": {
+                        "url": img_link
+                    }} 
+                ] if img_link != "" else [
+                    {"type": "text", "text": domain_c + context_c + REQUEST_UNSCRAMBLE + "Question: " + remove_backticked_imbeds(question["Question"]) + "Terms: " + "\n".join([f"{i + 1}. {term}" for i, term in enumerate(terms)]) + "\nDefinitions: " + "\n".join([f"{i + 1}. {defin}" for i, defin in enumerate(definitions)])}
+                ]
+            }
+        ]
+    )
+    
+    # the result is a list of definition indexes in the order of how they are supposed to match with the term indexes
+    # using the list, simply iterate in the order of the definitions and update them according to our array of numbers
+    print(response.choices[0].message.content)
+    try:
+        matchings = [int(num) for num in response.choices[0].message.content.split(",")]
+        for i in range(pair_count):
+            question['D' + str(i + 1)] = definitions[matchings[i] - 1]
+        
+    except Exception as e:
+        print("GPT failed the matching: " + str(e))
+        
+        return
+    
+    for i in range(pair_count):
+        print(question['T' + str(i + 1)] + ": " + question['D' + str(i + 1)])
 
+
+def parallelized_blank_fill(question, banned_items, id, domain, context, api_key, model):
+    # First retrieve an image embed if it exists
+    img_link = get_image_embed_links_if_any(question["Question"])
+    
+    # convert the banned items into a stringed list
+    banned_list = ", ".join(banned_items)
+    
+    # initalize client and domain/context segments
+    client = OpenAI(api_key=api_key)
+    domain_c = "Domain: " + domain + "\n"
+    context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
+    model_c = "gpt-4o-mini" if model == '3.5' else "gpt-4o"
+    
+    if question["T" + str(id)] == "" and question["D" + str(id)] != "":
+        # Get the response from the GPT
+        response = client.chat.completions.create (
+            model = model_c,
+            messages = [
+                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_GENERATE_TERM.replace("{X}", banned_list) + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
+                {
+                    "role":"user",
+                    "content": [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_TERM + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Definition: " + question["D" + str(id)]},
+                        {"type": "image_url", "image_url": {
+                            "url": img_link
+                        }} 
+                    ] if img_link != "" else [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_TERM + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Definition: " + question["D" + str(id)]}
+                    ]
+                }
+            ]
+        )
+
+        # idealy, the response should just be as simple as the term to use here, so we can 1-to-1 use it without any further parsing!
+        # regardless, at least sanitize the response a little bit.
+        question["T" + str(id)] = response.choices[0].message.content.strip().replace('\\\\', '\\')
+        
+        # add to term log to make sure we dont see this term again as a duplicate!
+        banned_items += [question["T" + str(id)]]
+    if question["D" + str(id)] == "" and question["T" + str(id)] != "":
+        # Get the response from the GPT
+        response = client.chat.completions.create (
+            model = model_c,
+            messages = [
+                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_GENERATE_DEFINITION.replace("{X}", banned_list) + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
+                {
+                    "role":"user",
+                    "content": [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_DEFINITION + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Term: " + question["T" + str(id)]},
+                        {"type": "image_url", "image_url": {
+                            "url": img_link
+                        }} 
+                    ] if img_link != "" else [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_DEFINITION + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Term: " + question["T" + str(id)]}
+                    ]
+                }
+            ]
+        )
+
+        # idealy, the response should just be as simple as the term to use here, so we can 1-to-1 use it without any further parsing!
+        question["D" + str(id)] = response.choices[0].message.content.strip().replace('\\\\', '\\')
+        
+        # add to term log to make sure we dont see this term again as a duplicate!
+        banned_items += [question["D" + str(id)]]
+
+def fill_matching_options(question, scrambled, domain, context, api_key, model):
     # iterate through the term definition pairs of the question
     matchings = sum(1 for key in question if key.startswith("D"))
     terms = []
     definitions = []
     for i in range(matchings):
         if question["T" + str(i + 1)] != "":
-            terms += question["T" + str(i + 1)]
+            terms += [question["T" + str(i + 1)]]
         elif question["D" + str(i + 1)] != "":
-            definitions += question["D" + str(i + 1)]
-    terms = ", ".join(terms)
-    definitions = ", ".join(definitions)
+            definitions += [question["D" + str(i + 1)]]
+            
+    # if we have no content, generate some terms relating to the question content, then populate those terms with definitions later on.
+    if matchings == 0:
+        # First retrieve an image embed if it exists
+        img_link = get_image_embed_links_if_any(question["Question"])
     
-    # reiterate to fill in all blanks
-    for i in range(matchings):
-        # fill in the term if its missing given the context of the definition.
-        print("T" + str(i + 1) + ", " + "D" + str(i+1))
-        print(question["T" + str(i + 1)] + ", " + question["D" + str(i + 1)])
-        if question["T" + str(i + 1)] == "" and question["D" + str(i + 1)] != "":
-            # Get the response from the GPT
-            response = client.chat.completions.create (
-                model = model_c,
-                messages = [
-                    {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_GENERATE_TERM + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-                    {
-                        "role":"user",
-                        "content": [
-                            {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_TERM.replace("{X}", terms) + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Definition: " + question["D" + str(i + 1)]},
-                            {"type": "image_url", "image_url": {
-                                "url": img_link
-                            }} 
-                        ] if img_link != "" else [
-                            {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_TERM.replace("{X}", terms) + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Definition: " + question["D" + str(i + 1)]}
-                        ]
-                    }
-                ]
-            )
-
-            print(response.choices[0].message.content)
+        # initalize client and domain/context segments
+        client = OpenAI(api_key=api_key)
+        domain_c = "Domain: " + domain + "\n"
+        context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
+        model_c = "gpt-4o-mini" if model == '3.5' else "gpt-4o"
+        
+        # Get the terms from the GPT
+        response = client.chat.completions.create (
+            model = model_c,
+            messages = [
+                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_INITAL_TERMS + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
+                {
+                    "role":"user",
+                    "content": [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_INITAL_TERMS + remove_backticked_imbeds(question["Question"])},
+                        {"type": "image_url", "image_url": {
+                            "url": img_link
+                        }} 
+                    ] if img_link != "" else [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_INITAL_TERMS + remove_backticked_imbeds(question["Question"])}
+                    ]
+                }
+            ]
+        )
+        
+        # Split the response and use that as our new defacto term list
+        terms = [term.strip() for term in response.choices[0].message.content.split(',')]
+        
+        # Create keys in our question according to the number of terms that we have
+        for i in range(len(terms)):
+            question["T" + str(i + 1)] = terms[i]
+            question["D" + str(i + 1)] = ""
+        matchings = len(terms)
+    
+    # fill the blanks in parallel based on what component is missing:
+    failsafe = 0
+    while any(question[f"T{i}"] == "" for i in range(1, matchings + 1)) or any(question[f"D{i}"] == "" for i in range(1, matchings + 1)) and failsafe < 5:
+        threads = []
+        t_gen = []
+        d_gen = []
+        for i in range(matchings):
+            if question["T" + str(i + 1)] == "" and question["D" + str(i + 1)] != "":
+                t_gen.append(i)
+                threads.append(threading.Thread(target=parallelized_blank_fill, args=(question, terms, i+1, domain, context, api_key, model)))
+                threads[-1].start()
+            elif question["D" + str(i + 1)] == "" and question["T" + str(i + 1)] != "":
+                d_gen.append(i)
+                threads.append(threading.Thread(target=parallelized_blank_fill, args=(question, definitions, i+1, domain, context, api_key, model)))
+                threads[-1].start()
+        for thread in threads:
+            thread.join()
+        threads.clear()
+        
+        # check for duplicates and "remove" them if necessary
+        if len(terms) != len(set(terms)):
+            dupe_terms = [item for item in set(terms) if terms.count(item) > 1 for _ in range(terms.count(item) - 1)]
+            print("Duplicate terms! " + str(dupe_terms))
+            for i in range(matchings):
+                if question["T" + str(i + 1)] in dupe_terms and i + 1 in t_gen:
+                    dupe_terms.remove(question["T" + str(i + 1)])
+                    question["T" + str(i + 1)] = ""
+        if len(definitions) != len(set(definitions)):
+            dupe_terms = [item for item in set(definitions) if definitions.count(item) > 1 for _ in range(definitions.count(item) - 1)] 
+            print("Duplicate definitions! " + str(dupe_terms))
+            for i in range(matchings):
+                if question["D" + str(i + 1)] in dupe_terms and i + 1 in d_gen:
+                    dupe_terms.remove(question["D" + str(i + 1)])
+                    question["D" + str(i + 1)] = ""
+                    
+        t_gen.clear()
+        d_gen.clear()
+        failsafe += 1
+        
+    if failsafe == 5:
+        print("FAILSAFE TRIGGERED! TOO MANY LOOPS!")
+        
+    # once the terms and definitions are populated, if prompeted unscramble them to be the correct matchings
+    if(scrambled):
+        unscramble_matching(question, domain, context, api_key, model)
 
 
 def fill_multiple_choice_options(question, domain, context, api_key, model):
@@ -855,60 +1018,87 @@ def generate_questions(sample, count, domain, context, api_key, model, t_results
     
     # parse the output produced by the GPT by splitting by the line
     result = response.choices[0].message.content.split('\n')
-    print(result)
-    key_parse = [tuple(line.split('~')) for line in result]
-    key_parse = [(key.strip(), item.strip()) for key, item in key_parse]
-    print(key_parse)
     
     # if the sample was TD, we need to count how many terms/definitions we got
     num_of_terms = 0
-    for key, item in key_parse:
-        if key.startswith("T"):
-            num_of_terms = max(num_of_terms, int(key[1:]))
+    for line in result:
+        if line.strip().startswith("T"):
+            num_of_terms = max(num_of_terms, int(line.split("~")[0][1:]))
+            
+    # write key dictionary for setting keys
+    setting_keys = {"Question": "", "Explaination": ""}
+    
+    # if sample is Ess, add base keys for guidelines, format, and language
+    if sample[0]['Type'] == 'Ess':
+        setting_keys['Guidelines'] = ""
+        setting_keys['Format'] = ""
+        setting_keys['Language'] = ""
     
     # use lists to keep track of items that we have multiplies of
-    key_keys = {}
+    key = ""
+    content = ""
     corrects = []
     incorrects = []
     terms = [["",""] for _ in range(num_of_terms)]
-    print(terms)
-    for key, item in key_parse:
+    for line in result:
+        # check if this line has a key
+        if "~" in line:
+            # push iterable based on previous key
+            if key.startswith("C"):
+                corrects += [content.strip()]
+            elif key.startswith("I"):
+                incorrects += [content.strip()]
+            elif key.startswith("T"):
+                terms[int(key[1:]) - 1][0] = content.strip()
+            elif key.startswith("D"):
+                terms[int(key[1:]) - 1][1] = content.strip()
+            
+            # define a new key and remove the prefix from the line
+            key, item = tuple([ln.strip() for ln in line.split("~", 2)])
+            
+            # clear content for new line
+            content = ""
+        else:
+            # otherwise, preserve the key and pass the line as the current item
+            item = line.strip()
+        
         # check for key keys
         if key.startswith("Q"):
-            key_keys['Question'] = item
+            setting_keys['Question'] += item + " "
         elif key.startswith("G"):
-            key_keys['Guidelines'] = item
+            setting_keys['Guidelines'] += item + " "
         elif key.startswith("F"):
-            key_keys['Format'] = item
+            setting_keys['Format'] += item + " "
         elif key.startswith("L"):
-            key_keys['Language'] = item
+            setting_keys['Language'] += item + " "
         elif key.startswith("E"):
-            key_keys['Explaination'] = item
+            setting_keys['Explaination'] += item + " "
         
-        # add iterables to their lists
+        # add to iterable
         if key.startswith("C"):
-            corrects += [item]
+            content += item + " "
         elif key.startswith("I"):
-            incorrects += [item]
+            content += item + " "
         elif key.startswith("T"):
-            terms[int(key[1:]) - 1][0] = item
+            content += item + " "
         elif key.startswith("D"):
-            terms[int(key[1:]) - 1][1] = item
+            content += item + " "
             
     # convert all term lists to tuples
     for term in terms:
         term = tuple(term)
     
     # using the parsed information, attempt to construct the correct question object based on the sampling type
+    for key, val in setting_keys.items():
+        setting_keys[key] = val.strip().replace('\\', '')
     match sample[0]['Type']:
         case "MC":
-            t_results += [construct_question_object("Multiple Choice", key_keys["Question"], "-1", corrects, incorrects, forced="0", explaination=key_keys["Explaination"])]
+            t_results += [construct_question_object("Multiple Choice", setting_keys["Question"], "-1", corrects, incorrects, forced="0", explaination=setting_keys["Explaination"])]
         case "TD":
-            t_results += [construct_question_object("Term-Definition", key_keys["Question"], "-1", forced="0", terms=terms, explaination=key_keys["Explaination"])]
+            t_results += [construct_question_object("Term-Definition", setting_keys["Question"], "-1", forced="0", terms=terms, explaination=setting_keys["Explaination"])]
         case "Ess":
-            t_results += [construct_question_object("Essay", key_keys["Question"], "-1", forced="0", guidelines=key_keys["Guidelines"], format=key_keys["Format"], language=key_keys["Language"], explaination=key_keys["Explaination"])]
+            t_results += [construct_question_object("Essay", setting_keys["Question"], "-1", forced="0", guidelines=setting_keys["Guidelines"], format=setting_keys["Format"], language=setting_keys["Language"], explaination=setting_keys["Explaination"])]
             
-    print(t_results)
     return
 
 def get_random_numaric_str(unique_arr, character_set, stri, unique):
@@ -1161,41 +1351,79 @@ def generate_explaination_for_question(question, domain, context, api_key, model
     context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
     model_c = "gpt-4o-mini" if model == '3.5' else "gpt-4o"
 
-    # get the required content for the prompt
-    correct_answers_c = "Correct Answers: "
-    for key, value in question.items():
-        if "C" in key:
-            correct_answers_c += value + ", "
-    content = "Question: " + remove_backticked_imbeds(question['Question']) + "\n" + remove_backticked_imbeds(correct_answers_c) + "\n"
+    # switch based on the question content
+    match question["Type"]:
+        case "MC":
+            # get the required content for the prompt
+            correct_answers_c = "Correct Answers: "
+            for key, value in question.items():
+                if "C" in key:
+                    correct_answers_c += value + ", "
+            content = "Question: " + remove_backticked_imbeds(question['Question']) + "\n" + remove_backticked_imbeds(correct_answers_c) + "\n"
 
-    # prompt the GPT to write the explaination
-    response = client.chat.completions.create (
-        model = model_c,
-        presence_penalty= 2,
-        messages = [
-            {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_EXPLAINATIONS + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-            {
-                "role":"user",
-                "content": [
-                    {"type": "text", "text": domain_c + context_c + REQUEST_EXPLAINATIONS + content},
-                    {"type": "image_url", "image_url": {
-                        "url": img_link
-                    }} 
-                ] if img_link != "" else [
-                    {"type": "text", "text": domain_c + context_c + REQUEST_EXPLAINATIONS + content}
+            # prompt the GPT to write the explaination
+            response = client.chat.completions.create (
+                model = model_c,
+                presence_penalty= 2,
+                messages = [
+                    {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_EXPLAINATIONS_MC + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
+                    {
+                        "role":"user",
+                        "content": [
+                            {"type": "text", "text": domain_c + context_c + REQUEST_EXPLAINATIONS_MC + content},
+                            {"type": "image_url", "image_url": {
+                                "url": img_link
+                            }} 
+                        ] if img_link != "" else [
+                            {"type": "text", "text": domain_c + context_c + REQUEST_EXPLAINATIONS_MC + content}
+                        ]
+                    }
                 ]
-            }
-        ]
-    )
+            )
+        case "TD":
+            # get the required content for the prompt
+            matchings = "Matchings: "
+            item_c = sum(1 for key in question if key.startswith("D"))
+            for i in range(item_c):
+                matchings += question["T" + str(i + 1)] + "-   " + question["D" + str(i + 1)] + "\t"
+            content = "Question: " + remove_backticked_imbeds(question['Question']) + "\n" + matchings + "\n"
+
+            # prompt the GPT to write the explaination
+            response = client.chat.completions.create (
+                model = model_c,
+                presence_penalty= 2,
+                messages = [
+                    {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_EXPLAINATIONS_TD + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
+                    {
+                        "role":"user",
+                        "content": [
+                            {"type": "text", "text": domain_c + context_c + REQUEST_EXPLAINATIONS_TD + content},
+                            {"type": "image_url", "image_url": {
+                                "url": img_link
+                            }} 
+                        ] if img_link != "" else [
+                            {"type": "text", "text": domain_c + context_c + REQUEST_EXPLAINATIONS_TD + content}
+                        ]
+                    }
+                ]
+            )
+        case "Ess":
+            # explainations for essay questions are generated at grade time, so we don't need to generate any explaination
+            question['Explaination'] = "Explainations for essay question to be generated at grade time, so none will be provided :)"
+            
+            return
 
     # wrap in try/except to flag an error if the api fails
     try:
-        # push to explaination
-        question['Explaination'] = response.choices[0].message.content[2:].strip().replace('\\\\', '\\')
+        # push to explaination, sanitize
+        if "E~" in response.choices[0].message.content:
+            question['Explaination'] = response.choices[0].message.content[2:].strip().replace('\\\\', '\\').replace("\n", " ")
+        else:
+            question['Explaination'] = response.choices[0].message.content.strip().replace('\\\\', '\\').replace("\n", " ")
     except Exception as e:
         # prompt error and prevent submit
         print("Failed call to GPT!")
-    
+
         return
 
 def test_api_key(api_key):
@@ -1348,7 +1576,9 @@ if __name__ == "__main__":
                     case 'MC':
                         fill_multiple_choice_options(question, domain, context, api_key, model)
                     case 'TD':
-                        fill_matching_options(question, False, domain, context, api_key, model)
+                        unscramb_input = input("Is this the correct matching of terms and definitions? (Y)es/(N)o: ")
+                        unscramble = not unscramb_input.lower().startswith("y")
+                        fill_matching_options(question, unscramble, domain, context, api_key, model)
                     case 'Ess':
                         print("Not implemented")
 

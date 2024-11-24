@@ -73,31 +73,41 @@ REQUEST_EXAMPLE_SELECT_CORRECT_CHOICE = """- A question and several answer choic
 REQUEST_SELECT_CORRECT_CHOICE = "Please select the correct answer choice from the following for THIS question\n"
 REQUEST_EXAMPLE_GENERATE_TERM = """- The question, followed by a definition, followed by a request to write the TERM that best fits the definition given the context and domain provided.
                                     Ex. Question: "Match the following concepts about project management, quality management, and configuration management:"
-                                    - Ex. 1 w/ input Definition: "Lack of Cohesion in Methods (LCOM)"
-                                        Your response: "A metric calculated by considering pairs of methods in a class and taking the difference between the number of method pairs without shared attributes and the number of method pairs with shared attributes."
-                                    - Ex. 2 w/ input Definition: "This is a measure of the number of functions or methods that call another function or method (say X)."
+                                    - Ex. w/ input Definition: "This is a measure of the number of functions or methods that call another function or method (say X)."
                                         Your response: "Fan-in"
                                 Notice, your response should ONLY be the text for the requested term, do not generate any additional flavor text!
-                                YOUR ANSWER CANNOT BE ONE OF THE FOLLOWING: {X}"""
+                                YOU ARE BANNED FROM USING: {X}, OR RELATED IN YOUR RESPONSE"""
 REQUEST_GENERATE_TERM = "Please generate the matching term for THIS definition given the question\n"
 REQUEST_EXAMPLE_GENERATE_DEFINITION = """- The question, followed by a term, followed by a request to write the DEFINITION that best fits the term given the context and domain provided.
                                     Ex. Question: "Match the following concepts about project management, quality management, and configuration management:"
-                                    - Ex. 1, w/ input Term: "Cyclomatic complexity"
+                                    - Ex. w/ input Term: "Cyclomatic complexity"
                                         Your response: "This is a measure of the intricacies of a program's control in which this control may be related to program understandability."
-                                    - Ex. 2, w/ input Term: "The process of considering each identified risk and make a judgment about the probability and seriousness of that risk."
-                                        Your response: "Risk analysis"
-                                Notice, your response should ONLY be the text for the requested definition, do not generate any additional flavor text!
-                                YOUR ANSWER CANNOT BE ONE OF THE FOLLOWING: {X}"""
+                                Notice, your response should ONLY be the text for the requested definition, do not generate any additional flavor text! Also, AVOID using the term in your generated definition as to not give the correct matching away!
+                                YOU ARE BANNED FROM USING: {X}; EXACTLY, but try to mimic a similar syntatical structure to these definitions!"""
 REQUEST_GENERATE_DEFINITION = "Please generate the matching definition for THIS term given the question\n"
+REQUEST_EXAMPLE_UNSCRAMBLE = """- A list of terms and definitions, in that order, followed by a request to MATCH each term with its appropriate definition. Given the complex nature of this task, you are to ONLY respond with the order of prefixes of the definitions such that they align with their correctly matched term in the order that the TERMS ARE LISTED.
+                            - Ex. Terms: "1. Message-based Interaction 2. Peer-to-peer architecture 3. Openness" Definitions: "1. Appropriate for systems where clients exchange information directly and the server acts as a facilitator. 2. The ability of the system to be easily integrated with and interoperate with products and services from different vendors. 3. Where A "sending" computer defines information about what is required in a message, which is then sent to another computer."
+                                Your Response: "3, 1, 2"
+                            Notice, your response only consists of the prefixes for the definitions that you are specifying, which are written in a comma seperated listed where each prefix matches the index of its correct matching term. (In this case, T1 - D3, T2 - D1, and T3 - D2)"""
+REQUEST_UNSCRAMBLE = "Please generate the list of matchings for THIS set of terms and definitions given the question\n"
 
-REQUEST_EXAMPLE_EXPLAINATIONS = """- A question followed by its correct answer(s) (provide the explaination for why the correct answer is correct in the context of the question).
+REQUEST_EXAMPLE_EXPLAINATIONS_MC = """- A question followed by its correct answer(s) (provide the explaination for why the correct answer is correct in the context of the question).
                                     - Ex. output:
                                         E~ A heap is a data structure used for collections where the maximal or minimal element is frequently accessed from the collection, as it performs this operations in near constant time, so a heap would be the best data structure for implementing A* pathfinding.
 
                                 For your explaination, make sure it is INSIGHTFUL and HELPFUL for the student, DO NOT USE ELEMENTS OF THE QUESTION OR ANSWERS WORD FOR WORD IN YOUR RESPONSE.
                                 Since your output will be fed directly to a program to be parsed, you MUST be STRICT with what you output, and be as BRIEF as possible. for ALL outputs, your responses MUST ADHERE TO THE ABOVE FORMAT NO MATTER WHAT
                                 ALL LaTEX formatting MUST be surrounded using: ```math:{math_content}```, where "{math_content}" is the LaTEX content! THIS FORMATTING IS PRECISE, DO NOT MISUSE IT"""
-REQUEST_EXPLAINATIONS = "Please provide the explaination for why the correct answers are correct in the context of THIS question\n"
+REQUEST_EXPLAINATIONS_MC = "Please provide the explaination for why the correct answers are correct in the context of THIS question\n"
+REQUEST_EXAMPLE_EXPLAINATIONS_TD = """- A question followed by its correct matching(s) (provide the explaination for why these matchings are correct in the context of the question).
+                                    - Ex. output:
+                                        E~ Message-based Interaction: This involves sending and receiving structured messages, enabling loosely coupled communication between distributed components. Peer-to-peer architecture: Direct exchanges between clients decentralize processing, with the server merely coordinating. Openness: Interoperability ensures compatibility across diverse systems, fostering adaptability and integration.
+
+                                For your explaination, make sure it is INSIGHTFUL and HELPFUL for the student, DO NOT USE ELEMENTS OF THE QUESTION OR ANSWERS WORD FOR WORD IN YOUR RESPONSE.
+                                Since your output will be fed directly to a program to be parsed, you MUST be STRICT with what you output, and be as BRIEF as possible. for ALL outputs, your responses MUST ADHERE TO THE ABOVE FORMAT NO MATTER WHAT
+                                DO NOT ENUMERATE YOUR RESPONSE, KEEP EXPLAINATIONS FOR EACH TERM TO NO MORE THAN 1-2 SENTENCES!
+                                ALL LaTEX formatting MUST be surrounded using: ```math:{math_content}```, where "{math_content}" is the LaTEX content! THIS FORMATTING IS PRECISE, DO NOT MISUSE IT"""
+REQUEST_EXPLAINATIONS_TD = "Please provide the explaination for why these matchings are correct in the context of THIS question\n"
 
 REQUEST_EXAMPLE_FILL_IN_BLANKS = """- A question with a blank followed by a request to fill in that blank with a UNIQUE response. How you fill the blank MUST make since according to the context and domain in addition to the context of the question itself:
                                     Provide FIVE UNIQUE options to fill in the blank. DO NOT enumerate output
@@ -128,6 +138,11 @@ REQUEST_EXAMPLE_FILL_IN_MATH = r"""- A question with a blank followed by a reque
                                             \int_{0}^{\frac{\pi}{2}} \cos^2(x) \, dx
                                             \int_{0}^{\frac{\pi}} \sin(x) \cos(x) \, dx"""
 REQUEST_FILL_IN_BLANKS = "Please provide FIVE UNIQUE options to fill in the blank for this question."
+REQUEST_EXAMPLE_INITAL_TERMS = """- A question, followed by a request for FOUR to SIX terms, comma seperated, that are to be defined later to form a term-definition question format. These terms should relate to the subject matter provided in the accompanying question!
+                                - Ex. for the question: "Match the following terms relating to Distributed Systems."
+                                    Your Response: "Message-based Interaction, Procedural Interaction, Openness, Fabrication, Interception"
+                                The terms that you provide should be a novel, unique spread to truely address the breadthy of the domain being asked by the question."""
+REQUEST_INITAL_TERMS = "Please provide FOUR to SIX terms for this question."
 
 REQUEST_EXAMPLE_QUESTIONS = "- The following {X} questions, which are formatted exactly how your output should be formatted (You will provide {Y} NEW questions in said format, DO NOT FORGET ANY OF THESE)\n"
 REQUEST_QUESTIONS = "Please provide the requested {X} questions in the same format as the provided questions were for your reference"
