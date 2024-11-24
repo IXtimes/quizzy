@@ -71,6 +71,24 @@ REQUEST_EXAMPLE_SELECT_CORRECT_CHOICE = """- A question and several answer choic
                                     RESPONSE: "A1, A3, A4, A5" 
                                     NOTE: FOR THESE EXAMPLES. Your output should be VERY SHORT"""
 REQUEST_SELECT_CORRECT_CHOICE = "Please select the correct answer choice from the following for THIS question\n"
+REQUEST_EXAMPLE_GENERATE_TERM = """- The question, followed by a definition, followed by a request to write the TERM that best fits the definition given the context and domain provided.
+                                    Ex. Question: "Match the following concepts about project management, quality management, and configuration management:"
+                                    - Ex. 1 w/ input Definition: "Lack of Cohesion in Methods (LCOM)"
+                                        Your response: "A metric calculated by considering pairs of methods in a class and taking the difference between the number of method pairs without shared attributes and the number of method pairs with shared attributes."
+                                    - Ex. 2 w/ input Definition: "This is a measure of the number of functions or methods that call another function or method (say X)."
+                                        Your response: "Fan-in"
+                                Notice, your response should ONLY be the text for the requested term, do not generate any additional flavor text!
+                                YOUR ANSWER CANNOT BE ONE OF THE FOLLOWING: {X}"""
+REQUEST_GENERATE_TERM = "Please generate the matching term for THIS definition given the question\n"
+REQUEST_EXAMPLE_GENERATE_DEFINITION = """- The question, followed by a term, followed by a request to write the DEFINITION that best fits the term given the context and domain provided.
+                                    Ex. Question: "Match the following concepts about project management, quality management, and configuration management:"
+                                    - Ex. 1, w/ input Term: "Cyclomatic complexity"
+                                        Your response: "This is a measure of the intricacies of a program's control in which this control may be related to program understandability."
+                                    - Ex. 2, w/ input Term: "The process of considering each identified risk and make a judgment about the probability and seriousness of that risk."
+                                        Your response: "Risk analysis"
+                                Notice, your response should ONLY be the text for the requested definition, do not generate any additional flavor text!
+                                YOUR ANSWER CANNOT BE ONE OF THE FOLLOWING: {X}"""
+REQUEST_GENERATE_DEFINITION = "Please generate the matching definition for THIS term given the question\n"
 
 REQUEST_EXAMPLE_EXPLAINATIONS = """- A question followed by its correct answer(s) (provide the explaination for why the correct answer is correct in the context of the question).
                                     - Ex. output:

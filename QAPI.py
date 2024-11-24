@@ -99,7 +99,7 @@ def validate_question_object(object):
                 
                 # iterate over the keys
                 for key, ___ in object.items():
-                    if not key.startswith(("T", "D")):
+                    if not key.startswith(("T", "D")) or key.startswith("Ty"):
                         continue
                     k_prefix = key[0]
                     k_val = int(key[1:])
@@ -400,6 +400,59 @@ def generate_permutation_from_question(question, domain, context, api_key, model
         return new_question
     else:
         t_results.append(new_question)
+
+def unscramble_matching(question, domain, context, api_key, model):
+    pass
+
+def fill_matching_options(question, scrambled, domain, context, api_key, model):
+    # First retrieve an image embed if it exists
+    img_link = get_image_embed_links_if_any(question["Question"])
+
+    # initalize client and domain/context segments
+    client = OpenAI(api_key=api_key)
+    domain_c = "Domain: " + domain + "\n"
+    context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
+    model_c = "gpt-4o-mini" if model == '3.5' else "gpt-4o"
+
+    # iterate through the term definition pairs of the question
+    matchings = sum(1 for key in question if key.startswith("D"))
+    terms = []
+    definitions = []
+    for i in range(matchings):
+        if question["T" + str(i + 1)] != "":
+            terms += question["T" + str(i + 1)]
+        elif question["D" + str(i + 1)] != "":
+            definitions += question["D" + str(i + 1)]
+    terms = ", ".join(terms)
+    definitions = ", ".join(definitions)
+    
+    # reiterate to fill in all blanks
+    for i in range(matchings):
+        # fill in the term if its missing given the context of the definition.
+        print("T" + str(i + 1) + ", " + "D" + str(i+1))
+        print(question["T" + str(i + 1)] + ", " + question["D" + str(i + 1)])
+        if question["T" + str(i + 1)] == "" and question["D" + str(i + 1)] != "":
+            # Get the response from the GPT
+            response = client.chat.completions.create (
+                model = model_c,
+                messages = [
+                    {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_GENERATE_TERM + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
+                    {
+                        "role":"user",
+                        "content": [
+                            {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_TERM.replace("{X}", terms) + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Definition: " + question["D" + str(i + 1)]},
+                            {"type": "image_url", "image_url": {
+                                "url": img_link
+                            }} 
+                        ] if img_link != "" else [
+                            {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_TERM.replace("{X}", terms) + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Definition: " + question["D" + str(i + 1)]}
+                        ]
+                    }
+                ]
+            )
+
+            print(response.choices[0].message.content)
+
 
 def fill_multiple_choice_options(question, domain, context, api_key, model):
     # First retrieve an image embed if it exists
@@ -721,13 +774,14 @@ def batch_generate_questions(bank, count, domain, context, api_key, model):
             threads[i].start()
         for i in range(num_of_threads):
             threads[i].join()
-        ai_generated_questions += [results]
+        ai_generated_questions += results
         threads.clear()
         results.clear()
         count -= MAX_THREADS * THREAD_SIZE
         
     # once all of the questions are generated, go back and update the q_indicies of every question
     q_count = len(bank)
+    print(ai_generated_questions)
     for question in ai_generated_questions:
         q_count += 1
         question["Q"] = str(q_count)
@@ -735,10 +789,7 @@ def batch_generate_questions(bank, count, domain, context, api_key, model):
     # return the AI generated questions collected
     return ai_generated_questions
 
-def generate_questions(sample, count, domain, context, api_key, model, t_results):
-    # create a list to store the AI generated questions from this thread
-    result_questions = []
-    
+def generate_questions(sample, count, domain, context, api_key, model, t_results):    
     # break immediately if we are to generate 0 questions
     if count == 0:
         return []
@@ -787,7 +838,7 @@ def generate_questions(sample, count, domain, context, api_key, model, t_results
         # append seperator
         questions += "\n"
         
-    # prompt the GPT to write the explaination
+    # prompt the GPT for the question
     response = client.chat.completions.create (
         model = model_c,
         presence_penalty= 2,
@@ -796,20 +847,23 @@ def generate_questions(sample, count, domain, context, api_key, model, t_results
             {
                 "role":"user",
                 "content": [
-                    {"type": "text", "text": domain_c + context_c + questions + REQUEST_EXPLAINATIONS.replace('{X}', num_of_questions)}
+                    {"type": "text", "text": domain_c + context_c + questions + REQUEST_QUESTIONS.replace('{X}', num_of_questions)}
                 ]
             }
         ]
     )
     
-    # parse the output produced by the GPT by splitting by the ~
-    result = response.choices[0].message.content.split('~')
-    key_parse = list(zip(result[::2].strip(), result[1::2].strip()))
+    # parse the output produced by the GPT by splitting by the line
+    result = response.choices[0].message.content.split('\n')
+    print(result)
+    key_parse = [tuple(line.split('~')) for line in result]
+    key_parse = [(key.strip(), item.strip()) for key, item in key_parse]
+    print(key_parse)
     
     # if the sample was TD, we need to count how many terms/definitions we got
     num_of_terms = 0
     for key, item in key_parse:
-        if key.startsWith("T"):
+        if key.startswith("T"):
             num_of_terms = max(num_of_terms, int(key[1:]))
     
     # use lists to keep track of items that we have multiplies of
@@ -817,37 +871,45 @@ def generate_questions(sample, count, domain, context, api_key, model, t_results
     corrects = []
     incorrects = []
     terms = [["",""] for _ in range(num_of_terms)]
+    print(terms)
     for key, item in key_parse:
         # check for key keys
-        if key.startsWith("Q"):
+        if key.startswith("Q"):
             key_keys['Question'] = item
-        elif key.startsWith("G"):
+        elif key.startswith("G"):
             key_keys['Guidelines'] = item
-        elif key.startsWith("F"):
+        elif key.startswith("F"):
             key_keys['Format'] = item
-        elif key.startsWith("L"):
+        elif key.startswith("L"):
             key_keys['Language'] = item
-        elif key.startsWith("E"):
+        elif key.startswith("E"):
             key_keys['Explaination'] = item
         
         # add iterables to their lists
-        if key.startsWith("C"):
+        if key.startswith("C"):
             corrects += [item]
-        elif key.startsWith("I") in key:
+        elif key.startswith("I"):
             incorrects += [item]
-        elif key.startsWith("T") in key:
-            terms[int(key[1:])][0] += [item]
-        elif key.startsWith("D") in key:
-            terms[int(key[1:])][1] += [item]
+        elif key.startswith("T"):
+            terms[int(key[1:]) - 1][0] = item
+        elif key.startswith("D"):
+            terms[int(key[1:]) - 1][1] = item
             
     # convert all term lists to tuples
     for term in terms:
         term = tuple(term)
     
     # using the parsed information, attempt to construct the correct question object based on the sampling type
-    match()
+    match sample[0]['Type']:
+        case "MC":
+            t_results += [construct_question_object("Multiple Choice", key_keys["Question"], "-1", corrects, incorrects, forced="0", explaination=key_keys["Explaination"])]
+        case "TD":
+            t_results += [construct_question_object("Term-Definition", key_keys["Question"], "-1", forced="0", terms=terms, explaination=key_keys["Explaination"])]
+        case "Ess":
+            t_results += [construct_question_object("Essay", key_keys["Question"], "-1", forced="0", guidelines=key_keys["Guidelines"], format=key_keys["Format"], language=key_keys["Language"], explaination=key_keys["Explaination"])]
             
-    
+    print(t_results)
+    return
 
 def get_random_numaric_str(unique_arr, character_set, stri, unique):
     # copy the passed string to modify
@@ -1286,13 +1348,16 @@ if __name__ == "__main__":
                     case 'MC':
                         fill_multiple_choice_options(question, domain, context, api_key, model)
                     case 'TD':
-                        print("Not implemented")
+                        fill_matching_options(question, False, domain, context, api_key, model)
                     case 'Ess':
                         print("Not implemented")
 
                 generate_explaination_for_question(question, domain, context, api_key, model)
 
                 print(question)
+
+                question_bank += [question]
+
                 question_index += 1
                 
             case 6:
@@ -1312,6 +1377,8 @@ if __name__ == "__main__":
                     results.clear()
                     n -= MAX_THREADS
             case 7:
-                print("Not Implemented!")
+                n = int(input("How many questions do you wish to generate? "))
+                question_bank += batch_generate_questions(question_bank, n, domain, context, api_key, model)
+                question_index = len(question_bank) + 1
             case 8:
                 driver_loop = False
