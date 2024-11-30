@@ -1,19 +1,25 @@
 import os
 import json
-import re
-import sys
-import time
+import fitz, docx2txt
+from pptx import Presentation
+from cryptography.fernet import Fernet
 from tkinter import filedialog
 import Levenshtein as lev
 from openai import OpenAI
 import requests
 from prompts import *
+from keys import CONTEXT_CRYPTO_KEY
+from tkinter import messagebox
 import random
 import threading
 
-CONTEXT_CUTOFF = 500
-MAX_THREADS = 5
+CONTEXT_CUTOFF = 750
+MAX_THREADS = 12
 THREAD_SIZE = 1
+
+def determine_model_str_from_index(model):
+    print("Making a GPT model call with " + "gpt-4o-mini" if model == 0 else ("gpt-4o" if model == 1 else "o1-mini"))
+    return "gpt-4o-mini" if model == 0 else ("gpt-4o" if model == 1 else "o1-mini")
 
 def get_driver_function():
     print('''Select a driver function: 
@@ -24,13 +30,121 @@ def get_driver_function():
           \t5. Write a new question and auto-complete for missing content
           \t6. Generate new question(s) based off written question w/ permutation
           \t7. Generate new question(s) off question bank sample
-          \t8. Exit''')
+          \t8. Attempt and grade specific question from question bank
+          \t9. Generate and attempt quiz from question bank
+          \t10. Exit''')
     return int(input("?: "))
+
+def is_number(s):
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+def all_at_once_numaric_comparision_grading(answers, correct_answers):
+    # get a list of similarities and copy the collections
+    similarities = []
+    ans = answers.copy()
+    cor_ans = correct_answers.copy()
+    
+    # iterate through the numbers in the ans list
+    for answer in ans:
+        # check if this answer is numaric
+        if not is_number(answer):
+            similarities.append(0.0)
+            
+            continue
+        
+        most_similar = ""
+        best_similarity = 0.0
+        # iterate through the cor_ans list
+        for correct in cor_ans:
+            # get the percent distance from this answer
+            distance = abs(float(answer) - float(correct)) / float(correct)
+            # get a ratio of value with a 5% confidence
+            similarity = 1 - min(distance / 0.05, 1)
+            
+            # compare with the score already logged for this answer
+            if similarity > best_similarity:
+                # save as best, remember with what string
+                best_similarity = similarity
+                most_similar = correct
+                
+        # check if a record was found to be similar
+        if best_similarity == 0.0:
+            # append a score of 0
+            similarities.append(0.0)
+            
+            # continue
+            continue
+                
+        # record this similarity and remove the most similar string from answer collection
+        similarities.append(best_similarity)
+        cor_ans.remove(most_similar)
+        
+    # return results
+    return similarities
+
+def all_at_once_answer_comparision_grading(answers, correct_answers):
+    # get a list of similarities and copy the lowercase conversion collections
+    similarities = []
+    ans = [ans.lower() for ans in answers]
+    cor_ans = [ans.lower() for ans in correct_answers]
+    
+    # iterate through the strings in the ans list
+    for answer in ans:
+        most_similar = ""
+        best_similarity = 0.0
+        best_diff = 0.0
+        
+        # iterate through the cor_ans list
+        for correct in cor_ans:
+            # get the Levenshtein similarity score between these 2 strinsg
+            distance = lev.distance(answer, correct)
+            max_length = max(len(answer), len(correct))
+            difference = (distance / max_length)
+            # get a ratio of value with 25% confidence
+            similarity = 1 - min(difference/.25, 1)
+            
+            # compare with the score already logged for this answer
+            if similarity > best_similarity:
+                # save as best, remember with what string
+                best_similarity = similarity
+                most_similar = correct
+                best_diff = difference
+                
+        # check if a record was found to be similar
+        if best_similarity == 0.0:
+            # append a score of 0
+            similarities.append(0.0)
+            
+            # continue
+            continue
+                
+        # record this similarity and remove the most similar string from answer collection and this answer
+        similarities.append(best_similarity)
+        cor_ans.remove(most_similar)
+        
+    # return results
+    return similarities
+
+def answer_comparision_grading(answer, correct_answer):
+    # get the Levenshtein similarity score between these 2 strinsg
+    distance = lev.distance(answer, correct_answer)
+    max_length = max(len(answer), len(correct_answer))
+    difference = (distance / max_length)
+    # get a ratio of value with 25% confidence
+    similarity = 1 - min(difference/.25, 1)
+    
+    # return this similarity
+    return similarity
 
 def validate_question_object(object):
     # ensure we have a question text and q_index, otherwise fail immediately
     if not 'Question' in object or not 'Q' in object:
         print("@FAIL (???): Object too corrupted to be a valid question object. Terminating...")
+        messagebox.showerror("Failure @?", "Unable to parse question header. File might be corrupted!")
         return False
     
     # for debugging, grab the question's index
@@ -70,17 +184,21 @@ def validate_question_object(object):
                 # check if we are missing correct answers or incorrect answers entirely
                 if num_cor == 0:
                     print(f'@FAIL ({q_index}): Question missing correct answers. Terminating...')
+                    messagebox.showerror(f"Failure @{q_index}", "Question missing correct answers, unable to import!")
                     return False  
                 if num_incor == 0:
                     print(f'@FAIL ({q_index}): Question missing incorrect answers. Terminating...')
+                    messagebox.showerror(f"Failure @{q_index}", "Question missing incorrect answers, unable to import!")
                     return False  
                     
                 # check if the counts match
                 if num_cor != max_cor:
                     print(f'@FAIL ({q_index}): Question correct answer count does not match maximal index. Terminating...')
+                    messagebox.showerror(f"Failure @{q_index}", "Correct answers are incorrectly indexed, unable to import!")
                     return False
                 if num_incor != max_incor:
                     print(f'@FAIL ({q_index}): Question incorrect answer count does not match maximal index. Terminating...')
+                    messagebox.showerror(f"Failure @{q_index}", "Incorrect answers are incorrectly indexed, unable to import!")
                     return False
                 
                 # check for illegal keys
@@ -89,6 +207,7 @@ def validate_question_object(object):
                         continue
                     if key.startswith(("T", "D", "Guidelines", "Format", "Language")):
                         print(f'@FAIL ({q_index}): MC question contains illegal key: "{key}" Terminating...')
+                        messagebox.showerror(f"Failure @{q_index}", f"Multiple choice question contains illegal key {key}, unable to import!")
                         return False
             case "TD":
                 # count the terms and definitions and ensure they enumerate correctly
@@ -118,17 +237,21 @@ def validate_question_object(object):
                 # check if we are missing terms or definitions entirely
                 if num_terms == 0:
                     print(f'@FAIL ({q_index}): Question missing terms. Terminating...')
+                    messagebox.showerror(f"Failure @{q_index}", "Question is missing term keys, unable to import!")
                     return False  
                 if num_defines == 0:
                     print(f'@FAIL ({q_index}): Question missing definitions. Terminating...')
+                    messagebox.showerror(f"Failure @{q_index}", "Question is missing definition keys, unable to import!")
                     return False  
                         
                 # check if the counts match
                 if num_terms != max_terms:
                     print(f'@FAIL ({q_index}): Question term count does not match maximal index. Terminating...')
+                    messagebox.showerror(f"Failure @{q_index}", "Terms are incorrectly indexed, unable to import!")
                     return False
                 if num_defines != max_defines:
                     print(f'@FAIL ({q_index}): Question definition count does not match maximal index. Terminating...')
+                    messagebox.showerror(f"Failure @{q_index}", "Definitions are incorrectly indexed, unable to import!")
                     return False
                 
                 # check for illegal keys
@@ -137,21 +260,24 @@ def validate_question_object(object):
                         continue
                     if key.startswith(("C", "A", "Guidelines", "Format", "Language")):
                         print(f'@FAIL ({q_index}): TD question contains illegal key: "{key}" Terminating...')
+                        messagebox.showerror(f"Failure @{q_index}", f"Term-definition question contains illegal key {key}, unable to import!")
                         return False
             case "Ess":
                 # fail if we lack guidelines
                 if not "Guidelines" in object:
                     print(f'@FAIL ({q_index}): Essay question missing guidelines. Terminating...')
+                    messagebox.showerror(f"Failure @{q_index}", "Question is missing grading guidelines, unable to import!")
                     return False
                 
-                # check for format specification, and default to "1" if missing
+                # check for format specification, and default to "0" if missing
                 if not "Format" in object:
-                    print(f'@WARN ({q_index}): Essay question missing format, defaulting to Essay (1)!')
-                    object["Format"] = "1"
+                    print(f'@WARN ({q_index}): Essay question missing format, defaulting to Explaination (0)!')
+                    object["Format"] = "0"
                 
                 # fail if format is "Code" and the language is not specified
-                if not "Language" in object or (object["Format"] == "2" and object["Language"] == "N/A"):
+                if not "Language" in object or (object["Format"] == "1" and object["Language"] == "N/A"):
                     print(f'@FAIL ({q_index}): Essay question missing language when "Code" was specified. Terminating...')
+                    messagebox.showerror(f"Failure @{q_index}", "Question is missing a language specification when 'Code' was specified, unable to import!")
                     return False
                 
                 # check for illegal keys
@@ -160,14 +286,17 @@ def validate_question_object(object):
                         continue
                     if key.startswith(("T", "D", "A", "C")):
                         print(f'@FAIL ({q_index}): Essay question contains illegal key: "{key}" Terminating...')
+                        messagebox.showerror(f"Failure @{q_index}", f"Essay question contains illegal key {key}, unable to import!")
                         return False
             case _:
                 # fail for invalid type
                 print(f'@FAIL ({q_index}): Question failed validation due to corrupted type: "{object["Type"]}". Terminating...')
+                messagebox.showerror(f"Failure @{q_index}", f"{object["Type"]} is not a valid question type, unable to import!")
                 return False
                     
     except Exception as e:
         print(f'@FAIL ({q_index}): Question failed validation due to exception: "{e}". Terminating...')
+        messagebox.showerror(f"Failure @{q_index}", f"Importing this question generated the following exception: {e}, unable to import!")
         return False
     
     # check for a forced state, default to "Either" (0)
@@ -182,6 +311,36 @@ def validate_question_object(object):
         
     # if we make it here, then this question must be valid!
     return True                
+
+def prompt_for_answer_for_question(question, is_frq, Q_index = -1):
+    # create a list to capture the answer(s)
+    answer_choices = []
+    
+    # switch on question type
+    match question['Type']:
+        case "MC":
+            # get the number of expected correct answers
+            expected_answer_count = sum(1 for key in question if key.startswith("C"))
+            
+            # print the question out
+            print(f"{"" if Q_index == -1 else str(Q_index) + ". "}{question["Question"]}")
+            
+            # if this is an FRQ question, prompt immediately
+            if is_frq:
+                answer_count = 0
+                
+                # continue to prompt until we meet the expected answer count
+                while answer_count < expected_answer_count:
+                    input_ans = input(f"{answer_count}?: ")
+                    answer_choices.append(input_ans)
+                    answer_count += 1
+            else:
+                # print the answer choices out in a randomized order
+                correct_answers = [c_ans for c_key, c_ans in question.items() if c_key.startswith("C")]
+                random.shuffle(correct_answers)
+                
+                for i in range(len(correct_answers)):
+                    pass # START HERE
 
 def construct_question_object(type, question = None, q_index = None, correct_answers = None, incorrect_answers = None, terms = None, guidelines = None, format = None, language = None, forced = None, explaination = None):
     # create an empty dictionary to represent this question
@@ -243,7 +402,7 @@ def get_question_from_user_input(index, force_valid_input = False):
         if type == "Multiple Choice" or type == "Term-Definition" or type == "Essay":
             break
     
-    while True:
+    while True and type != "Essay":
         print('''Select one of the following:
             \t1. The question can have FRQ responses
             \t2. The question NEVER has FRQ responses
@@ -317,9 +476,11 @@ def get_question_from_user_input(index, force_valid_input = False):
                 
             # ask for the language that the expected code is to be written in
             language = input("Enter the language you expect the student's response to be written in: ") if format == 1 else ""
+            if language == "":
+                language = "Any language"
             
             # generate and return the built question
-            return construct_question_object(type, question, index, guidelines=guidelines, format=format, language=language, forced=replaced)
+            return construct_question_object(type, question, index, guidelines=guidelines, format=format, language=language, forced="1")
         case _:
             print("Failed to build question due to illegal input!")
             return None
@@ -373,6 +534,148 @@ def get_image_embed_links_if_any(question):
     # return blank if no link is found
     return ""
 
+def grade_quiz_in_parallel(quiz_set, answer_set, frq_set, domain, context, api_key, model):
+    # get the number of questions in the quiz set that need to be graded
+    question_count = len(quiz_set)
+    grade_list = [None] * question_count
+    Q_index = 0
+    
+    # create as many threads as needed to process the count, using constants on max threads and batch size to determine our thread distribution
+    threads = []
+    while question_count > 0:
+        # get a quota for this iteration
+        quota = MAX_THREADS if question_count >= MAX_THREADS else question_count
+        for i in range(quota):
+            # grade the question on its own thread
+            threads.append(threading.Thread(target=grade_question, args=(quiz_set[Q_index], Q_index, answer_set[Q_index], frq_set[Q_index], domain, context, api_key, model, grade_list)))
+            threads[i].start()
+            Q_index += 1
+        for i in range(quota):
+            threads[i].join()
+        threads.clear()
+        question_count -= quota
+        
+    # get the overall grade
+    grade = sum(grade_list) / (len(quiz_set) * 10) * 100
+    
+    # return the overall grade
+    return grade
+
+def grade_question(question, Q_index, answers, frqComp, domain, context, api_key, model, t_results = None):
+    # grade this question differently depending on its type
+    match question['Type']:
+        case "MC":
+            # collect the correct answers of the question
+            correct_answers = []
+            for key, val in question.items():
+                if key.startswith("C"):
+                    correct_answers += val
+                    
+            # determine if we are doing numaric comparision grading
+            is_numaric = all([is_number(ans) for ans in correct_answers])
+                        
+            # determine if this question is prosed as a FRQ
+            if frqComp:
+                max_weighted_score = len(correct_answers)
+                score = 0
+                
+                # compare each answer choice against all possible correct answers and take the one with the best score (answers are written and thus may partially match)
+                if is_numaric:
+                    # get the best matching answer-score pair
+                    results = all_at_once_numaric_comparision_grading(answers, correct_answers)
+                    
+                    # add the results sum to the total score
+                    score += sum(results)
+                else:
+                    # get the best matching answer-score pair
+                    results = all_at_once_answer_comparision_grading(answers, correct_answers)
+                    
+                    # add the results sum to the total score
+                    score += sum(results)
+                    
+                # scale the score out of 1
+                score = score / max_weighted_score
+            else:
+                # answers must absolutely match, so we can simply just do a quick union of the 2 sets
+                missing_matches = list(set(answers).union(set(correct_answers)))
+                
+                # the score is the inverse of the ratio of missing matches over total correct answers
+                score = 1 - (len(missing_matches) / len(correct_answers))
+        case "TD":
+            # collect the terms in the order that they appear from the question
+            matchings = sum(1 for key in question if key.startswith("D"))
+            terms = []
+            for i in range(matchings):
+                terms += [question["T" + str(i + 1)]]
+                
+            # determine if this question is prosed as a FRQ
+            max_weighted_score = len(terms)
+            score = 0
+            if frqComp:
+                # iterate over the answers and compare them to their respective term, where score can be partial if the provided answer is close
+                score = sum([answer_comparision_grading(ans, term) for ans, term in zip(answers, terms)]) / max_weighted_score
+            else:
+                # iterate over the answers and just check if they are equal, no partial credit
+                score = sum([1 if ans == term else 0 for ans, term in zip(answers, terms)]) / max_weighted_score
+        case "Ess":
+            # score is completely determined by prompt through assessing the answer that the user typed in and how it adheres to the question guidelines
+            score = grade_essay_question(question, answers[0], domain, context, api_key, model)
+            
+    # scale the score to 10 points and push the grade to threads if applicable
+    if t_results:
+        t_results[Q_index] = int(score * 10)
+    else:
+        return int(score * 10)
+            
+def grade_essay_question(question, answer, domain, context, api_key, model):
+    # First retrieve an image embed if it exists
+    img_link = get_image_embed_links_if_any(question["Question"])
+    
+    # initalize client and domain/context segments
+    client = OpenAI(api_key=api_key)
+    domain_c = "Domain: " + domain + "\n"
+    context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
+    model_c = determine_model_str_from_index(model)
+    
+    # determine how the student response will be graded 
+    match question['Format']:
+        case "0": # Explaination
+            format = "Graded as an explaination; "
+        case "1": # Code
+            format = "Graded as code written in " + question['Language'] + "; "
+        case "2": # Proof
+            format = "Graded as a proof; "
+            
+    # Get the response from the GPT
+    response = client.chat.completions.create (
+        model = model_c,
+        messages = [
+            {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_GRADE_ESSAY_GUIDELINES + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
+            {
+                "role":"user",
+                "content": [
+                    {"type": "text", "text": domain_c + context_c + format + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Guidelines: " + question["Guidelines"] + "\n" +  REQUEST_GRADE_ESSAY_GUIDELINES + "\nInput Response: " + answer},
+                    {"type": "image_url", "image_url": {
+                        "url": img_link
+                    }} 
+                ] if img_link != "" else [
+                    {"type": "text", "text": domain_c + context_c + format + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Guidelines: " + question["Guidelines"] + "\n" +  REQUEST_GRADE_ESSAY_GUIDELINES + "\nInput Response: " + answer}
+                ]
+            }
+        ]
+    )
+
+    # split the response into the grade and explaination
+    result = response.choices[0].message.content.strip().replace('\\\\', '\\')
+    grade = int(result.split("~")[0])
+    explaination = result.split("~")[1]
+    
+    # override the question's explaination with the one the AI cooked up
+    question["Explaination"] = explaination
+    
+    # return the score
+    return grade / 10
+
 def generate_permutation_from_question(question, domain, context, api_key, model, t_results = None):
     # create a new question object
     new_question = {}
@@ -390,7 +693,7 @@ def generate_permutation_from_question(question, domain, context, api_key, model
         case 'TD':
             fill_matching_options(new_question, False, domain, context, api_key, model)
         case 'Ess':
-            print("Not implemented")
+            fill_essay_guidelines(new_question, domain, context, api_key, model)
 
     # finally, generate the explaination for the question.
     generate_explaination_for_question(new_question, domain, context, api_key, model)
@@ -417,7 +720,7 @@ def unscramble_matching(question, domain, context, api_key, model):
     client = OpenAI(api_key=api_key)
     domain_c = "Domain: " + domain + "\n"
     context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-    model_c = "gpt-4o-mini" if model == '3.5' else "gpt-4o"
+    model_c = determine_model_str_from_index(model)
     
     # have the GPT unscramble the term-definition pairs
     response = client.chat.completions.create (
@@ -466,7 +769,7 @@ def parallelized_blank_fill(question, banned_items, id, domain, context, api_key
     client = OpenAI(api_key=api_key)
     domain_c = "Domain: " + domain + "\n"
     context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-    model_c = "gpt-4o-mini" if model == '3.5' else "gpt-4o"
+    model_c = determine_model_str_from_index(model)
     
     if question["T" + str(id)] == "" and question["D" + str(id)] != "":
         # Get the response from the GPT
@@ -540,7 +843,7 @@ def fill_matching_options(question, scrambled, domain, context, api_key, model):
         client = OpenAI(api_key=api_key)
         domain_c = "Domain: " + domain + "\n"
         context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-        model_c = "gpt-4o-mini" if model == '3.5' else "gpt-4o"
+        model_c = determine_model_str_from_index(model)
         
         # Get the terms from the GPT
         response = client.chat.completions.create (
@@ -617,6 +920,49 @@ def fill_matching_options(question, scrambled, domain, context, api_key, model):
         unscramble_matching(question, domain, context, api_key, model)
 
 
+def fill_essay_guidelines(question, domain, context, api_key, model):
+    # First retrieve an image embed if it exists
+    img_link = get_image_embed_links_if_any(question["Question"])
+    
+    # initalize client and domain/context segments
+    client = OpenAI(api_key=api_key)
+    domain_c = "Domain: " + domain + "\n"
+    context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
+    model_c = determine_model_str_from_index(model)
+    
+    # determine how the student response will be graded 
+    match question['Format']:
+        case "0": # Explaination
+            format = "Graded as an explaination; "
+        case "1": # Code
+            format = "Graded as code written in " + question['Language'] + "; "
+        case "2": # Proof
+            format = "Graded as a proof; "
+    
+    # Check if we are missing the guidelines to the question
+    if question["Guidelines"] == "":
+        # Get the response from the GPT
+        response = client.chat.completions.create (
+            model = model_c,
+            messages = [
+                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_GENERATE_ESSAY_GUIDELINES + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
+                {
+                    "role":"user",
+                    "content": [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_ESSAY_GUIDELINES + format + "Question: "+ remove_backticked_imbeds(question["Question"])},
+                        {"type": "image_url", "image_url": {
+                            "url": img_link
+                        }} 
+                    ] if img_link != "" else [
+                        {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_ESSAY_GUIDELINES + format + "Question: "+ remove_backticked_imbeds(question["Question"])}
+                    ]
+                }
+            ]
+        )
+
+        # idealy, the response should just be as simple as the guidelines for which we follow, so we just sanitize and use it directly
+        question["Guidelines"] = response.choices[0].message.content.strip().replace('\\\\', '\\')
+
 def fill_multiple_choice_options(question, domain, context, api_key, model):
     # First retrieve an image embed if it exists
     img_link = get_image_embed_links_if_any(question["Question"])
@@ -625,7 +971,7 @@ def fill_multiple_choice_options(question, domain, context, api_key, model):
     client = OpenAI(api_key=api_key)
     domain_c = "Domain: " + domain + "\n"
     context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-    model_c = "gpt-4o-mini" if model == '3.5' else "gpt-4o"
+    model_c = determine_model_str_from_index(model)
 
     # Determine what parts of the question we are missing
     # Generate the correct answer(s) and incorrect answer(s) if both are (effectively) missing
@@ -961,7 +1307,7 @@ def generate_questions(sample, count, domain, context, api_key, model, t_results
     client = OpenAI(api_key=api_key)
     domain_c = "Domain: " + domain + "\n"
     context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-    model_c = "gpt-4o-mini" if model == '3.5' else "gpt-4o"
+    model_c = determine_model_str_from_index(model)
     
     # get a textual representation of the prompt count to emphasize the amount requested
     if count == 1:
@@ -1288,7 +1634,7 @@ def seed_permutations_in_question(question_text, domain, context, api_key, model
     client = OpenAI(api_key=api_key)
     domain_c = "Domain: " + domain + "\n"
     context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-    model_c = "gpt-4o-mini" if model == '3.5' else "gpt-4o"
+    model_c = determine_model_str_from_index(model)
     
     # iterate getting responses from our client to fill in the blanks as they appear.
     # blanks already filled are considered a singular segment, the current blank appears blank and is requested to be filled, where all remaining blanks are filled with their default values.
@@ -1349,7 +1695,7 @@ def generate_explaination_for_question(question, domain, context, api_key, model
     client = OpenAI(api_key=api_key)
     domain_c = "Domain: " + domain + "\n"
     context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-    model_c = "gpt-4o-mini" if model == '3.5' else "gpt-4o"
+    model_c = determine_model_str_from_index(model)
 
     # switch based on the question content
     match question["Type"]:
@@ -1463,10 +1809,15 @@ def import_from_quizzy_file():
             # check if all contents are there
             domain = extracted_values['Domain']
             print("Read domain successfully!")
-            context = extracted_values['Context']
-            print("Read context successfully!")
             data = extracted_values['Data']
             print("Read data successfully!")
+            
+            # decode the context segement, as it is encrypted.
+            cipher_suite = Fernet(CONTEXT_CRYPTO_KEY)
+            decoded_context = cipher_suite.decrypt(extracted_values['Context'].encode("utf-8")).decode('utf-8')
+            context = decoded_context
+            print(context)
+            print("Read context successfully!")
             print("All contents found SUCCESSFULLY!")
             
             # iterate through the question objects and modify/validate them to be correct
@@ -1477,13 +1828,13 @@ def import_from_quizzy_file():
                 # return the domain, context, and data segment as a tuple
                 print("Data segment VALIDATED!")
                 print("Successfully read Quizzy file!")
-                return (domain, context, data)
+                return (domain, context, data, bank_path)
         except Exception as e:
             print("Failed to read Quizzy file. Is it formatted correctly?")
     else:
         print("Failed to find Quizzy file. Is the path correct?")
         
-    return ("No domain provided", "No context provided", [])
+    return ("No domain provided", "No context provided", [], "")
 
 def export_to_quizzy_file(domain, context, data):
     # get the path to the file we want to save
@@ -1493,11 +1844,16 @@ def export_to_quizzy_file(domain, context, data):
     # fail if the file path is invalid
     if not save_path:
         print("Failed to find path. Was it written correctly?")
+        messagebox.showerror("Error", "There was an issue saving this deck to that location!")
         return False
+    
+    # encode the context segement so that its information is compacted and obscurred when stored as a file to still allow quizzy files to be edited at the file level.
+    cipher_suite = Fernet(CONTEXT_CRYPTO_KEY)
+    encoded_context = cipher_suite.encrypt(context.encode("utf-8")).decode('utf-8')
     
     # create a save data object
     save = {"Domain":domain,
-            "Context":context,
+            "Context":encoded_context,
             "Data":data}
     
     # export to JSON file
@@ -1509,18 +1865,52 @@ def export_to_quizzy_file(domain, context, data):
     print("Successfully saved Quizzy file")
     return True
 
+def get_text_context_from_file(files):
+    # use a variable to collate all text content
+    text_content = ""
+    
+    # process the text content of the file differently depending on what type it is
+    for file_path in files:
+        extension = file_path.split(".")[-1]
+        match extension:
+            case "txt":
+                text_content += open(file_path, "r").read()
+            case "pdf":
+                doc = fitz.open(file_path)
+                for page in doc:
+                    text_content += page.get_text() + "\n\n"
+                doc.close()
+            case "docx":
+                text_content += docx2txt.process(file_path)
+            case "pptx":
+                prs = Presentation(file_path)
+                for slide in prs.slides:
+                    for shape in slide.shapes:
+                        if hasattr(shape, "text"):
+                            text_content += shape.text + "\n"
+            case _:
+                text_content += open(file_path, "r").read()
+            
+    return text_content
+
 if __name__ == "__main__":
     driver_loop = True
     
     domain = input("Enter the domain segment: ")
     print("Requesting file that contains context...")
+    context = ""
     try:
-        context_file = filedialog.askopenfilename(defaultextension='.txt', filetypes=[("Text", "*.txt")])
-        context = open(context_file, "r").read()
-        print("Successfully read from context file")
+        while True:
+            context_file = filedialog.askopenfilenames(defaultextension='*.txt *.docx *.pdf *.pptx', filetypes=[("ALL Supported Types", "*.txt *.docx *.pdf *.pptx"), ("Text", "*.txt"), ("Word Document", "*.docx"), ("PDF Document", "*.pdf"), ("Powerpoint Presentation", "*.pptx")])
+            context += get_text_context_from_file(context_file.split(".")[-1], context_file)
+            print("Successfully read from context file")
+            repeat = input("Would you like to open another file? (Y)es/(N)o ?: ")
+            if not repeat.lower().startswith('y'):
+                break
     except Exception as e:
-        context = "No context provided"
-        print("Failed to read context file")
+        if context == "":
+            context = "No context provided"
+        print("Failed to read context file: " + str(e))
     model = "3.5"
     online = True
     
@@ -1580,7 +1970,7 @@ if __name__ == "__main__":
                         unscramble = not unscramb_input.lower().startswith("y")
                         fill_matching_options(question, unscramble, domain, context, api_key, model)
                     case 'Ess':
-                        print("Not implemented")
+                        fill_essay_guidelines(question, domain, context, api_key, model)
 
                 generate_explaination_for_question(question, domain, context, api_key, model)
 
@@ -1611,4 +2001,13 @@ if __name__ == "__main__":
                 question_bank += batch_generate_questions(question_bank, n, domain, context, api_key, model)
                 question_index = len(question_bank) + 1
             case 8:
+                n = int(input("Which question from the bank do you want to answer? "))
+                is_frq = input("Would you like to open another file? (Y)es/(N)o ?: ").lower().startswith("y")
+                question_to_answer = question_bank[n]
+                answer = prompt_for_answer_for_question(question_to_answer, is_frq)
+                print(question)
+                print(grade_question(question_to_answer, -1, answer, is_frq, domain, context, api_key, model))
+            case 9:
+                print("Not implemented!")
+            case 10:
                 driver_loop = False

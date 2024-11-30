@@ -22,7 +22,8 @@ class Quizzy(ctk.CTk):
         self.title('Quizzy')
         self.geometry('1000x925')
         self.iconbitmap(resource_path('Quizzy_Icon.ico'))
-        self.resizable(False, False)
+        self.resizable(True, True)
+        self.minsize(1000, 925)
         
         # map closing with the x button
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -81,7 +82,7 @@ class MainMenu(ctk.CTkFrame):
         
         # Create a frame for the main application interface
         self.menu_frame = ctk.CTkFrame(self, fg_color=LIGHT, corner_radius=20)
-        self.menu_frame.pack(pady=10, ipady=10, ipadx=30)
+        self.menu_frame.pack(pady=10, ipady=10, ipadx=30, anchor='center')
         
         # Create the main application interface
         self.app_title = ctk.CTkLabel(self.menu_frame, text='Quizzy', font=(FONT, HEADER_FONT_SIZE, 'bold'))
@@ -106,11 +107,14 @@ class MainMenu(ctk.CTkFrame):
         self.context = ctk.CTkFrame(self.menu_frame, fg_color='transparent')
         self.context.columnconfigure(0, weight=3)
         self.context.columnconfigure(1, weight=12)
-        self.context.rowconfigure(0,weight=1)
+        self.context.rowconfigure((0, 1),weight=1)
         self.context_label = ctk.CTkLabel(self.context, text="Context: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
         self.context_label.grid(row=0, column=0, sticky='nw', pady=5, ipadx=5)
+        context_from_file_image = Image.open(resource_path("Add File.png")).resize((32,32))
+        self.context_import_from_file = ctk.CTkButton(self.context, image=ctk.CTkImage(context_from_file_image), fg_color=SECONDARY, hover_color=SECONDARY_HOVER, text='', font=(FONT, NORMAL_FONT_SIZE), height=32, width=32, command=self.append_to_context_from_file)
+        self.context_import_from_file.grid(row=1, column=0, padx=10, sticky='es')
         self.context_entry = ctk.CTkTextbox(self.context, text_color=SELECT_BG, font=(FONT, NORMAL_FONT_SIZE), height=160)
-        self.context_entry.grid(column=1, row=0, sticky='ew')
+        self.context_entry.grid(column=1, row=0, rowspan=2, sticky='ew')
         self.context.pack(fill='x', side='top', pady=2, padx=25)
         
         # Bind the functions to the appropriate events
@@ -133,7 +137,7 @@ class MainMenu(ctk.CTkFrame):
         
         # Create a frame for the main application settings
         self.settings_frame = ctk.CTkFrame(self, fg_color=LIGHT, corner_radius=20)
-        self.settings_frame.pack(pady=10, ipady=10)
+        self.settings_frame.pack(pady=10, ipady=10, anchor='center')
         
         # Create the settings interface
         self.settings_title = ctk.CTkLabel(self.settings_frame, text='Settings', font=(FONT, TITLE_FONT_SIZE, 'bold'))
@@ -156,44 +160,46 @@ class MainMenu(ctk.CTkFrame):
         self.apikey_frame_amnt = ctk.CTkTextbox(self.settings_region, font=(FONT, NORMAL_FONT_SIZE), height=20, width=400)
         
         # Model selection
-        self.model = tk.IntVar()
-        self.model.set(0)
+        self.model_index_var = tk.IntVar()
+        self.model_index_var.set(0)
         self.model_to_be = ctk.CTkFrame(self.settings_region, fg_color='transparent')
         self.model_label = ctk.CTkLabel(self.settings_region, text="Model:", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
         self.model_label.grid(row=1, column=0, sticky='ne', padx=25, pady=2)
-        self.GPT4 = ctk.CTkRadioButton(self.model_to_be, radiobutton_height=12, radiobutton_width=12, text="GPT-4o (Smarter, costly)", variable=self.model, font=(FONT, NORMAL_FONT_SIZE), value=1)
-        self.GPT4.pack(side='right', padx=40)
-        self.GPT35 = ctk.CTkRadioButton(self.model_to_be, radiobutton_height=12, radiobutton_width=12, text="GPT-4o mini (Cheap, lightweight)", variable=self.model, font=(FONT, NORMAL_FONT_SIZE), value=0)
-        self.GPT35.pack(side='right', padx=40)
+        self.GPT_model_2_radio_input = ctk.CTkRadioButton(self.model_to_be, radiobutton_height=12, radiobutton_width=12, text="GPT-o1 (Math/Sci, expensive)", variable=self.model_index_var, font=(FONT, NORMAL_FONT_SIZE), value=2)
+        self.GPT_model_2_radio_input.pack(side='right', padx=20)
+        self.GPT_model_1_radio_input = ctk.CTkRadioButton(self.model_to_be, radiobutton_height=12, radiobutton_width=12, text="GPT-4o (Lang/Hist, costly)", variable=self.model_index_var, font=(FONT, NORMAL_FONT_SIZE), value=1)
+        self.GPT_model_1_radio_input.pack(side='right', padx=20)
+        self.GPT_model_0_radio_input = ctk.CTkRadioButton(self.model_to_be, radiobutton_height=12, radiobutton_width=12, text="GPT-4o mini (General, cheap)", variable=self.model_index_var, font=(FONT, NORMAL_FONT_SIZE), value=0)
+        self.GPT_model_0_radio_input.pack(side='right', padx=20)
         self.model_to_be.grid(row=1, column=1, sticky='nw', padx=25, pady=2, columnspan=2)
         
         # Offline mode
-        self.offline = tk.IntVar()
-        self.offline.set(0)
-        self.offline_to_be = ctk.CTkFrame(self.settings_region, fg_color='transparent')
-        self.offline_label = ctk.CTkLabel(self.settings_region, text="Enable offline mode?", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
-        self.offline_label.grid(row=2, column=0, sticky='ne', padx=25, pady=2)
-        self.is_offline = ctk.CTkRadioButton(self.offline_to_be, radiobutton_height=12, radiobutton_width=12, text="Yes (Disables online features)", variable=self.offline, font=(FONT, NORMAL_FONT_SIZE), value=1)
+        self.is_offline_var = tk.IntVar()
+        self.is_offline_var.set(0)
+        self.is_offline_to_be = ctk.CTkFrame(self.settings_region, fg_color='transparent')
+        self.is_offline_label = ctk.CTkLabel(self.settings_region, text="Enable offline mode?", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+        self.is_offline_label.grid(row=2, column=0, sticky='ne', padx=25, pady=2)
+        self.is_offline = ctk.CTkRadioButton(self.is_offline_to_be, radiobutton_height=12, radiobutton_width=12, text="Yes (Disables online features)", variable=self.is_offline_var, font=(FONT, NORMAL_FONT_SIZE), value=1)
         self.is_offline.pack(side='right', padx=40)
-        self.is_online = ctk.CTkRadioButton(self.offline_to_be, radiobutton_height=12, radiobutton_width=12, text="No", variable=self.offline, font=(FONT, NORMAL_FONT_SIZE), value=0)
+        self.is_online = ctk.CTkRadioButton(self.is_offline_to_be, radiobutton_height=12, radiobutton_width=12, text="No", variable=self.is_offline_var, font=(FONT, NORMAL_FONT_SIZE), value=0)
         self.is_online.pack(side='right', padx=40)
-        self.offline_to_be.grid(row=2, column=1, sticky='nw', padx=25, pady=2, columnspan=2)
+        self.is_offline_to_be.grid(row=2, column=1, sticky='nw', padx=25, pady=2, columnspan=2)
         
         # Context cutoff entry
-        self.context_cutoff_label = ctk.CTkLabel(self.settings_region, text="Context cutoff:", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
-        self.context_cutoff_label.grid(row=3, column=0, sticky='ne', padx=25, pady=2)
-        self.context_cutoff_amnt = ctk.CTkTextbox(self.settings_region, font=(FONT, NORMAL_FONT_SIZE), height=20)
-        self.context_cutoff_amnt.grid(row=3, column=1, sticky='snew', padx=25, pady=2, columnspan=2)
+        #self.context_cutoff_label = ctk.CTkLabel(self.settings_region, text="Context cutoff:", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+        #self.context_cutoff_label.grid(row=3, column=0, sticky='ne', padx=25, pady=2)
+        #self.context_cutoff_amnt = ctk.CTkTextbox(self.settings_region, font=(FONT, NORMAL_FONT_SIZE), height=20)
+        #self.context_cutoff_amnt.grid(row=3, column=1, sticky='snew', padx=25, pady=2, columnspan=2)
         
         # slider for batch size
-        self.batch_size = tk.IntVar()
-        self.batch_size.set(5)
-        self.batch_size_label = ctk.CTkLabel(self.settings_region, text="Batch size: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
-        self.batch_size_label.grid(row=4, column=0, sticky='ne', padx=25, pady=2)
-        self.batch_size_amount_label = ctk.CTkLabel(self.settings_region, textvariable=self.batch_size, fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
-        self.batch_size_amount_label.grid(row=4, column=2, sticky='nw', padx=25, pady=2)
-        self.batch_size_slider = ctk.CTkSlider(self.settings_region, from_=1, to=5, variable=self.batch_size)
-        self.batch_size_slider.grid(row=4, column=1, sticky='ew', padx=25, pady=2)
+        #self.batch_size = tk.IntVar()
+        #self.batch_size.set(5)
+        #self.batch_size_label = ctk.CTkLabel(self.settings_region, text="Batch size: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+        #self.batch_size_label.grid(row=4, column=0, sticky='ne', padx=25, pady=2)
+        #self.batch_size_amount_label = ctk.CTkLabel(self.settings_region, textvariable=self.batch_size, fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+        #self.batch_size_amount_label.grid(row=4, column=2, sticky='nw', padx=25, pady=2)
+        #self.batch_size_slider = ctk.CTkSlider(self.settings_region, from_=1, to=5, variable=self.batch_size)
+        #self.batch_size_slider.grid(row=4, column=1, sticky='ew', padx=25, pady=2)
         
         # Once the entire UI has loaded in, fetch the settings and write them to the settings fields
         try:
@@ -217,20 +223,32 @@ class MainMenu(ctk.CTkFrame):
             try:
                 # write from dictionary to fields
                 self.apikey_frame_amnt.insert(tk.END, settings['API Key'])
-                self.model.set(0 if settings['Model'] == '3.5' else 1)
-                self.offline.set(1 if settings['Offline'] else 0)
-                self.context_cutoff_amnt.insert(tk.END, str(settings['ContextCut']))
-                self.batch_size.set(settings['Batch'])
+                self.model_index_var.set(settings['Model'])
+                self.is_offline_var.set(1 if settings['Offline'] else 0)
+                #self.context_cutoff_amnt.insert(tk.END, str(settings['ContextCut']))
+                #self.batch_size.set(settings['Batch'])
             except Exception as e:
                 # write from dictionary to fields
                 self.apikey_frame_amnt.insert(tk.END, settings['API Key'])
-                self.model.set(1)
-                self.offline.set(0)
-                self.context_cutoff_amnt.insert(tk.END, "0")
-                self.batch_size.set(5)
+                self.model_index_var.set(1)
+                self.is_offline_var.set(0)
+                #self.context_cutoff_amnt.insert(tk.END, "0")
+                #self.batch_size.set(5)
         
         # pack the main menu
-        self.pack(expand=True, fill='both')
+        self.pack(expand=True, fill='both', anchor='center')
+     
+    def append_to_context_from_file(self):
+        # get the text content from a more complex file and simply append that to the context segment
+        files_to_get_context_from = filedialog.askopenfilenames(defaultextension='*.txt *.docx *.pdf *.pptx', filetypes=[("ALL Supported Types", "*.txt *.docx *.pdf *.pptx"), ("Text", "*.txt"), ("Word Document", "*.docx"), ("PDF Document", "*.pdf"), ("Powerpoint Presentation", "*.pptx")])
+        
+        # get the collated text content from all those files
+        text_content = get_text_context_from_file(files_to_get_context_from)
+        
+        # append it to the current context and display it in the appropriate text fields
+        if files_to_get_context_from:
+            self.clear_hint(None, self.context_entry)
+            self.context_entry.insert(tk.END, text_content)
         
     def show_api_key(self):
         # hide the show api key button
@@ -240,74 +258,55 @@ class MainMenu(ctk.CTkFrame):
         self.apikey_frame_amnt.grid(row=0, column=1, sticky='snew', padx=25, pady=2)
         
     def import_quiz_information(self):
-        # open a dialog to the get path of the quizzy file to import
-        self.file_path = filedialog.askopenfilename(defaultextension='.qizy', filetypes=[("Quizzy Files", "*.qizy")])
+        self.domain, self.context, self.question_data, self.file_path = import_from_quizzy_file()
         
-        if self.file_path: # Check if the file path is valid
-            try:
-                # open the file for parsing
-                with open(self.file_path, 'r', encoding='utf-8') as import_file:
-                    json_data = import_file.read()
-                    
-                # convert from JSON to dictionary
-                py_obj = json.loads(json_data)
-                extracted_values = py_obj
-
-                # package what was read into the entries in the main menu
-                self.domain_entry.delete(1.0, tk.END)
-                self.domain_entry.insert(tk.END, extracted_values['Domain'])
-                self.domain_entry.configure(text_color=DARK)
-                self.context_entry.delete(1.0, tk.END)
-                self.context_entry.insert(tk.END, extracted_values['Context'])
-                self.context_entry.configure(text_color=DARK)
-                    
-                # create a list to store each question read, and a dictionary to store each question's key-value pairs
-                self.question_data = extracted_values['Data']
-                
-                # update create button to reflect an import rather than creating a new quiz
-                self.new_quiz_button.configure(fg_color=SUCCESS)
-                self.new_quiz_button.configure(hover_color=SUCCESS_HOVER)
-                self.new_quiz_button.configure(text="Open this quiz")
-            except Exception as e:
-                messagebox.showerror("Uh oh!", "There was an error reading this files contents. It might be corrupted!")
-                
-                # clear everything
-                self.file_path = ""
-                self.question_data = []
-                self.domain_entry.delete(1.0, tk.END)
-                self.domain_entry.insert(tk.END, self.domain_hint_text)
-                self.domain_entry.configure(text_color=SELECT_BG)
-                self.context_entry.delete(1.0, tk.END)
-                self.context_entry.insert(tk.END, self.context_hint_text)
-                self.context_entry.configure(text_color=SELECT_BG)
+        # check if we got information from a file correctly
+        if self.question_data:
+            # package what was read into the entries in the main menu
+            self.domain_entry.delete(1.0, tk.END)
+            self.domain_entry.insert(tk.END, self.domain)
+            self.domain_entry.configure(text_color=DARK)
+            self.context_entry.delete(1.0, tk.END)
+            self.context_entry.insert(tk.END, self.context)
+            self.context_entry.configure(text_color=DARK)
+            
+            # update create button to reflect an import rather than creating a new quiz
+            self.new_quiz_button.configure(fg_color=SUCCESS)
+            self.new_quiz_button.configure(hover_color=SUCCESS_HOVER)
+            self.new_quiz_button.configure(text="Open this quiz")
         else:
-            messagebox.showerror("Huh?", "There was an error with opening this file path. Check if its correct.")
-            self.file_path = ""
+            # clear import fields
+            self.domain_entry.delete(1.0, tk.END)
+            self.domain_entry.insert(tk.END, self.domain_hint_text)
+            self.domain_entry.configure(text_color=SELECT_BG)
+            self.context_entry.delete(1.0, tk.END)
+            self.context_entry.insert(tk.END, self.context_hint_text)
+            self.context_entry.configure(text_color=SELECT_BG)
         
     def open_quiz(self):
         # check if the contents of the domain or context fields are empty
         if self.domain_entry.get('1.0', 'end-1c') == self.domain_hint_text or self.context_entry.get('1.0', 'end-1c') == self.context_hint_text or not self.domain_entry.get('1.0', 'end-1c') or not self.context_entry.get('1.0', 'end-1c'):
-            if(not messagebox.askyesno("Double check!", "Are you sure you want to enter this quiz without context and/or a domain? While not required these greatly help with generating new practice questions!")):
+            if(not messagebox.askyesno("Notice", "Are you sure you want to enter this quiz without context and/or a domain? While not required these greatly help with generating new practice questions!")):
                 return
         
         # test api key
         valid_key = test_api_key(self.apikey_frame_amnt.get('1.0', 'end-1c'))
         
         if not valid_key:
-            if messagebox.askyesno("API Check!", "It appears the API key that you entered is invalid, would you like to reenter a new key? Otherwise you will continue in offline mode."):
+            if messagebox.askyesno("Warning", "It appears the API key that you entered is invalid, would you like to reenter a new key? Otherwise you will continue in offline mode."):
                 return
             else:
-                self.offline.set(1)
+                self.is_offline_var.set(1)
         
         # check if cutoff amount is set correctly
-        if not self.context_cutoff_amnt.get('1.0', 'end-1c').isdigit() and messagebox.askyesno("Settings check!", "The context cutoff you provided isnt a valid number. Do you want to change it? otherwise it default to 50!"):
-            return
+        #if not self.context_cutoff_amnt.get('1.0', 'end-1c').isdigit() and messagebox.askyesno("Settings check!", "The context cutoff you provided isnt a valid number. Do you want to change it? otherwise it default to 50!"):
+        #    return
             
-        settings = {'API Key':self.apikey_frame_amnt.get('1.0', 'end-1c'),
-                    'Model':"3.5" if self.model.get() == 0 else "4.0",
-                    'Offline':False if self.offline.get() == 0 else True,
-                    'ContextCut':self.context_cutoff_amnt.get('1.0', 'end-1c') if self.context_cutoff_amnt.get('1.0', 'end-1c').isdigit() else 50,
-                    'Batch':self.batch_size.get()}  
+        settings = {'API Key': self.apikey_frame_amnt.get('1.0', 'end-1c'),
+                    'Model': self.model_index_var.get(),
+                    'Offline': self.is_offline_var.get() != 0}
+                    #'ContextCut': self.context_cutoff_amnt.get('1.0', 'end-1c') if self.context_cutoff_amnt.get('1.0', 'end-1c').isdigit() else 50,
+                    #'Batch': self.batch_size.get()}  
         
         # push settings information to the user path
         json_settings = json.dumps(settings, indent=4)

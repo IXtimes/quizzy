@@ -165,49 +165,15 @@ class Builder(ctk.CTkFrame):
             # continue to the save deck function
             self.save_deck()
         else:
-            messagebox.showerror("Unkown?", "There was an issue saving this deck to that location!")
+            messagebox.showerror("Error", "There was an issue saving this deck to that location!")
         
     def save_deck(self, event = None):
-        # check if we need to get a save path since this is the first time saving the deck
-        if self.filepath == "":
-            file_path = filedialog.asksaveasfile(initialfile=f'{self.domain}.qizy', mode='w', defaultextension='.qizy', filetypes=[("Quizzy Files", "*.qizy"), ("All Files", "*.*")]).name # File dialog to get a file path to save at
+        try:
+            # export the file information using the call in the API
+            return export_to_quizzy_file(self.domain, self.context, [question_frame.content for question_frame in self.saved_questions])
+        except Exception as e:
+            messagebox.showerror("Error", f"There was an issue saving this deck: {e}")
             
-            if file_path: # Check if the file path is valid
-                # update save path
-                self.filepath = file_path
-            else:
-                messagebox.showerror("Unknown?", "There was an issue saving this deck to that location!")
-                self.filepath = ""
-                return False
-                
-        # check afterwards if we have a valid file path
-        if self.filepath != "":
-            # get a list of question data from the question frames
-            data = []
-            for question_frame in self.saved_questions:
-                data.append(question_frame.content)
-            
-            # prune from saved questions any entries used for flag purposes
-            for question in data:
-                for key, ___ in question.items():
-                    if key == "Flag" or key == "AI Generated":
-                        del data[key]
-            
-            # create a save file dictionary
-            save = {"Domain":self.domain,
-                    "Context":self.context,
-                    "Data":data}
-            
-            # export to JSON file
-            json_data = json.dumps(save, indent=4)
-            with open(self.filepath, 'w', encoding='utf-8') as export:
-                # write to destination
-                export.write(json_data)
-                        
-            self.modified = False            
-            
-            return True
-        return False
  
 class QuizFrame(ctk.CTkFrame):
     def __init__(self, parent_frame, parent, get_quiz, settings):
@@ -462,15 +428,13 @@ class BuilderFrame(ctk.CTkFrame):
         self.refresh_explaination_flag = False
         self.is_modified = False
         
-        # format the frame to have a selector and a question render field
-        self.columnconfigure(0, weight=2, uniform='a')
-        self.columnconfigure(1, weight=1, uniform='a')
-        self.rowconfigure(0, weight=1, uniform='b')
-        self.rowconfigure(1, weight=1, uniform='b')
-        self.rowconfigure(2, weight=1, uniform='b')
-        
         self.question_label = ctk.CTkLabel(self, text="Question #", fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'), textvariable=self.question_index)
         self.question_label.pack(padx=10, pady=10, anchor='w')
+        
+        self.question_type_index = tk.StringVar()
+        self.question_type_index.set("MC")
+        self.question_type_dropdown = ctk.CTkComboBox(self, font=(FONT, NORMAL_FONT_SIZE), values=["MC", "TD", "Ess"], command=self.change_question_type, variable=self.question_type_index)
+        self.question_type_dropdown.pack(padx=10, pady=10, anchor='e')
         
         # create the frame that will contain the question entry information
         self.question_frame = ctk.CTkFrame(self, fg_color='transparent')
@@ -484,11 +448,34 @@ class BuilderFrame(ctk.CTkFrame):
         self.confirm_explaination = None
         self.explain_frame = None
         
-        # create a frame for the question entry
+        # create a frame for collecting the entry information of this question type!
         self.question = MultipleChoice(self.question_frame, self.modified)
         self.is_modified = False
         
         self.pack(ipadx=20, fill='x', padx=20, pady=20) 
+        
+    def change_question_type(self, e):
+        # first, ensure the selection being made is not a duplicate to avoid wasteful rerendering!
+        match self.question_type_index.get():
+            case "MC":
+                if isinstance(self.question, MultipleChoice):
+                    return
+            case "TD":
+                if isinstance(self.question, TermDefinition):
+                    return
+            case "Ess":
+                if isinstance(self.question, Essay):
+                    return
+        
+        # based on the current selection, rerender the question segment with the correct object
+        self.question.destroy()
+        match self.question_type_index.get():
+            case "MC":
+                self.question = MultipleChoice(self.question_frame, self.modified)
+            case "TD":
+                self.question = TermDefinition(self.question_frame, self.modified)
+            case "Ess":
+                self.question = Essay(self.question_frame, self.modified)
         
     def enable_explaination_refresh(self):
         # reset the state of the explaination refresh button
@@ -553,38 +540,12 @@ class BuilderFrame(ctk.CTkFrame):
             self.refresh_explaination.destroy()
         if self.explain_frame:
             self.explain_frame.destroy()
-            
-    def get_image_embed_links_if_any(self, question):
-        # Split the question content into chunks to search for the first img embed
-        imbeds = question.split('```')
-        
-        for i, chunk in enumerate(imbeds):
-            if i % 2 != 0:
-                # determine what imbed we are using
-                header = chunk.split(':')[0]
-                if header == "img":
-                    # we are imbedding an image, remove header from string
-                    link = chunk[4:]
-                    
-                    # fetch the image using a request
-                    response = requests.get(link)
-                    
-                    # check if successful
-                    if response.status_code == 200:
-                        # return link
-                        return link
-                    else:
-                        # return blank
-                        return ""
-                    
-        # return blank if no link is found
-        return ""
                                 
     def submit_question(self):
         # check that the question field has content
         if(len(self.question.question_entry.get('1.0', 'end-1c')) < 1):
             # prompt window stating that the question at least requires a question
-            messagebox.showwarning("Hold Up!", "You need to at least define a question before you can submit this to your deck!")
+            messagebox.showwarning("Error!", "You need to at least define a question before you can submit this to your deck!")
             
             return
         
@@ -592,331 +553,98 @@ class BuilderFrame(ctk.CTkFrame):
         submit_list = {}
         
         # collate the contents of the question fields into a dictionary of strings based on the fields read, each string will be prefixed with its key
+        # additionally, what we collate into what key depends on the question type!
+        submit_list['Type'] = self.question_type_index.get()
         submit_list['Q'] = str(self.q_index)
-        for i, field_var in enumerate(self.question.gui_held_information):
-            if i == 0:
-                submit_list["Question"] = field_var.get()
-            elif i <= self.question.correct_answers:
-                submit_list["C" + str(i)] = field_var.get()
-            else:
-                submit_list["A" + str(i - self.question.correct_answers)] = field_var.get()
-        submit_list['Explaination'] = self.question.explaination
-        submit_list['Forced'] = str(self.question.forced.get())
+        match submit_list['Type']:
+            case "MC": # collect all correct and incorrect answers inputted, gained from the question's provided opened fields
+                for i, field_var in enumerate(self.question.gui_held_information):
+                    if i == 0:
+                        submit_list["Question"] = field_var.get()
+                    elif i <= self.question.correct_answers:
+                        submit_list["C" + str(i)] = field_var.get()
+                    else:
+                        submit_list["A" + str(i - self.question.correct_answers)] = field_var.get()
+                submit_list['Forced'] = str(self.question.forced.get())
+                submit_list['Explaination'] = self.question.explaination
+            case "TD": # collect all correct and incorrect answers inputted, gained from the question's provided opened fields
+                for i, field_var in enumerate(self.question.gui_held_information):
+                    if i == 0:
+                        submit_list["Question"] = field_var.get()
+                    elif i <= self.question.matchings:
+                        submit_list["T" + str(i)], submit_list["D" + str(i)] = (field_var[0].get(),field_var[1].get())
+                submit_list['Forced'] = str(self.question.forced.get())
+                submit_list['Explaination'] = self.question.explaination
+            case "Ess": # collect all correct and incorrect answers inputted, gained from the question's provided opened fields
+                submit_list['Format'] = str(self.question.format.get())
+                submit_list["Question"] = self.question.question_entry.get('1.0', 'end-1c')
+                submit_list["Guidelines"] = self.question.guidelines_entry.get('1.0', 'end-1c')
+                if int(submit_list['Format']) == 1:
+                    submit_list["Language"] = self.question.code_lang_entry.get('1.0', 'end-1c')
+                else:
+                    submit_list["Language"] = "N/A"
+                submit_list['Explaination'] = "Explainations for essay question to be generated at grade time, so none will be provided :)"
         
-        # check if we have at least one correct answer and one incorrect answer if we are offline
-        if self.settings['Offline'] and (not "C1" in submit_list or not "A1" in submit_list):
-            messagebox.showwarning("Offline!", "Sorry, since you are in offline mode you must provide at least one correct and incorrect answer to the question before you can submit it to your deck!")
-            
-            return
+        print(submit_list)
         
-        # if offline inform about no automatic explaination generation
-        if self.settings['Offline'] and submit_list['Explaination'].strip() == '':
-            messagebox.showinfo("Offline!", "Heads up, inital explaination generation isnt performed in offline mode. Please reedit this question if you would like to provide an explaination of your own!")
-            
-            submit_list['Explaination'] = "No explaination was generated :("
-        
-        # skip calls if offline
-        if not self.settings['Offline']:
-            # MAKE CALLS TO CHATGPT FOR MISSING FIELDS HERE
-            # set the assistant up here
-            client = OpenAI(api_key=self.settings['API Key'])
-            domain = "Domain: " + self.background[0] + "\n"
-            model = "gpt-4o-mini" if self.settings['Model'] == '3.5' else "gpt-4o"
-            
-            # we define the context by selecting a random span of context cut words from said context
-            context_words = self.background[1].split(" ")
-            start_point = random.choice(range(0, max(len(context_words) - int(self.settings['ContextCut']), 1)))
-            context = "Context: " + " ".join(context_words[start_point:min(start_point+int(self.settings['ContextCut']), len(context_words))]) + "\n"
-            img_link = self.get_image_embed_links_if_any(submit_list['Q'])
-            system_img = """Use the image that you are provided to aid in constructing your response.""" if img_link != "" else ""
-            
-            # determine if we need answer choices
-            if not "C1" in submit_list.keys() and not "A1" in submit_list.keys():
-                # set the environment up
-                system = """You are an assistant knowledgeable in many academic subjects. In particular, the user is a student who will specify what domain they request that you fetch knowledge from, while also providing a small paragraph of context that helps you generate helpful responses for the user.
-
-                            In particular, your responses are tailored to generating practice test questions, whether that be filling in missing parts of user-created questions such as picking correct answers, generating incorrect answers, or writing an explanation as to why the correct answer is the correct answer. You will also be providing full-on new practice questions for the user to practice with based on a subset of questions picked and the ascribed domain and context be provided with every input.
-
-                            The input you receive will also be minimal to help with processing and costs associated. You will ALWAYS be given a domain, denoted with the prefix "Domain:" for which the question comes from. In addition, you will ALWAYS be given a subset of "Context:" for which you should prioritize when synthesizing your answer. Lastly, you will receive one of the following:
-                            - A question followed by a request for answer choices (provide a correct answer and 3 incorrect answer choices in that order, side note, if you anticipate the question is a true or false question, then only specify 1 correct answer and 1 incorrect answer)
-                                - Ex. output 1:
-                                    C~ They can be assigned to variables, passed as arguments, and returned as values.
-                                    I~ They can only be assigned to variables and stored in data structures
-                                    I~ They can only be passed as arguments to other functions
-                                    I~ They can only be returned as values from other functions
-                                - Ex. output 2:
-                                    C~ True
-                                    I~ False
-                            
-                            Since your output will be fed directly to a program to be parsed, you MUST be STRICT with what you output, and be as BRIEF as possible. for ALL outputs, your responses MUST ADHERE TO THE ABOVE FORMAT NO MATTER WHAT
-                            
-                            Please keep in mind you are free to use any characters in your response as the delimiters will help the program figure out what field means what."""
-                
-                # get the required context for the prompt
-                background = remove_backticked_imbeds(submit_list["Question"]) + "\n"
-                request = "Please provide answer choices for this question"
-                
-                # prompt for answer choices
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system + system_img},
-                        {"role": "user", "content": domain + context + background + request} if img_link == "" else {"role": "user", 
-                                                                                                                     "content": [
-                                                                                                                         {"type": "text", "text": domain + context + background + request},
-                                                                                                                         {
-                                                                                                                             "type": "image_url",
-                                                                                                                             "image_url": {
-                                                                                                                                 "url": img_link
-                                                                                                                             }
-                                                                                                                         }
-                                                                                                                         ]},
-                        
-                    ]
-                )
-                
-                # wrap in try/except to flag an error if the api fails
-                try:
-                    # iterate through the output
-                    lines = response.choices[0].message.content.split('\n')
-                    cur_key = ""
-                    num_cor = 0
-                    num_incor = 0
-                    for line in lines:
-                        # check if this line contains a correct answer
-                        if line.strip().startswith('C~'):
-                            # get the new key
-                            num_cor += 1
-                            cur_key = "C" + str(num_cor)
-                            
-                            # set this line into the question dictionary
-                            submit_list[cur_key] = line[2:].strip()
-                        # check if this line contains a incorrect answer
-                        elif line.strip().startswith('I~'):
-                            # get the new key
-                            num_incor += 1
-                            cur_key = "A" + str(num_incor)
-                            
-                            # set this line into the question dictionary
-                            submit_list[cur_key] = line[2:].strip()
-                        # otherwise is continuation of previous line
-                        else:
-                            # if we enter here without a key, something went wrong
-                            if cur_key == "":
-                                raise Exception()
-                            
-                            # append this line to the previous on a newline
-                            submit_list[cur_key] = "\n" + line.strip()
-                except Exception as e:
-                    # prompt error and prevent submit
-                    messagebox.showerror(":(", "There was an error calling the API, try rewording your question and/or answer choices")
-                
+        # now, generate or fail for all missing fields based on the question's type
+        match submit_list['Type']:
+            case "MC":  
+                # check if we have at least one correct answer and one incorrect answer if we are offline
+                if self.settings['Offline'] and (not "C1" in submit_list or not "A1" in submit_list):
+                    messagebox.showwarning("Offline!", "Since you are in offline mode you must provide at least one correct and incorrect answer to the question before you can submit it to your deck!")
+                    
                     return
                 
-            # determine if we need incorrect answer choices
-            if "C1" in submit_list.keys() and not "A1" in submit_list.keys():
-                # set the environment up
-                system = """You are an assistant knowledgeable in many academic subjects. In particular, the user is a student who will specify what domain they request that you fetch knowledge from, while also providing a small paragraph of context that helps you generate helpful responses for the user.
-
-                            In particular, your responses are tailored to generating practice test questions, whether that be filling in missing parts of user-created questions such as picking correct answers, generating incorrect answers, or writing an explanation as to why the correct answer is the correct answer. You will also be providing full-on new practice questions for the user to practice with based on a subset of questions picked and the ascribed domain and context be provided with every input.
-
-                            The input you receive will also be minimal to help with processing and costs associated. You will ALWAYS be given a domain, denoted with the prefix "Domain:" for which the question comes from. In addition, you will ALWAYS be given a subset of "Context:" for which you should prioritize when synthesizing your answer. Lastly, you will receive one of the following:
-                            - A question with a single correct answer, followed by a request for incorrect answer choices (provide 3 incorrect answer choices)
-                                - Ex. output:
-                                    I~ They can only be assigned to variables and stored in data structures
-                                    I~ They can only be passed as arguments to other functions
-                                    I~ They can only be returned as values from other functions 
-                            
-                            Since your output will be fed directly to a program to be parsed, you MUST be STRICT with what you output, and be as BRIEF as possible. for ALL outputs, your responses MUST ADHERE TO THE ABOVE FORMAT NO MATTER WHAT
-                            
-                            Please keep in mind you are free to use any characters in your response as the delimiters will help the program figure out what field means what."""
+                # if offline inform about no automatic explaination generation
+                if self.settings['Offline'] and submit_list['Explaination'].strip() == '':
+                    messagebox.showinfo("Offline!", "Inital explaination generation isnt performed in offline mode. Please reedit this question if you would like to provide an explaination of your own!")
+                    
+                    submit_list['Explaination'] = "No explaination was generated :("
                 
-                # get the required context for the prompt
-                background = "Question: " + remove_backticked_imbeds(submit_list["Question"]) + "\nCorrect Answer: " + remove_backticked_imbeds(submit_list["C1"]) + "\n"
-                request = "Please provide 3 incorrect answer choices given the correct answer"
-                
-                # prompt for answer choices
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system + system_img},
-                        {"role": "user", "content": domain + context + background + request} if img_link == "" else {"role": "user", 
-                                                                                                                     "content": [
-                                                                                                                         {"type": "text", "text": domain + context + background + request},
-                                                                                                                         {
-                                                                                                                             "type": "image_url",
-                                                                                                                             "image_url": {
-                                                                                                                                 "url": img_link
-                                                                                                                             }
-                                                                                                                         }
-                                                                                                                         ]},
+                # skip calls if offline
+                if not self.settings['Offline']:
+                    # Fill for missing choices using the multiple-choice helper function
+                    fill_multiple_choice_options(submit_list, self.parent.domain, self.parent.context, self.settings["API Key"], self.settings["Model"])
                         
-                    ]
-                )
-                
-                # wrap in try/except to flag an error if the api fails
-                try:
-                    # iterate through the output
-                    lines = response.choices[0].message.content.split('\n')
-                    cur_key = ""
-                    num_cor = 0
-                    num_incor = 0
-                    for line in lines:
-                        # check if this line contains a incorrect answer
-                        if line.strip().startswith('I~'):
-                            # get the new key
-                            num_incor += 1
-                            cur_key = "A" + str(num_incor)
-                            
-                            # set this line into the question dictionary
-                            submit_list[cur_key] = line[2:].strip()
-                        # otherwise is continuation of previous line
-                        else:
-                            # if we enter here without a key, something went wrong
-                            if cur_key == "":
-                                raise Exception()
-                            
-                            # append this line to the previous on a newline
-                            submit_list[cur_key] = "\n" + line.strip()
-                except Exception as e:
-                    # prompt error and prevent submit
-                    messagebox.showerror(":(", "There was an error calling the API, try rewording your question and/or answer choices")
-                
+                    # if no explaination exists for the correct answer to this question, or one has been requested via a flag, generate an explaination
+                    if submit_list["Explaination"] == "" or self.refresh_explaination_flag:
+                        generate_explaination_for_question(submit_list, self.parent.domain, self.parent.context, self.settings["API Key"], self.settings["Model"])
+            
+            case "TD":  
+                # check if we have at least one matching if we are offline
+                if self.settings['Offline'] and (not "T1" in submit_list or not "D1" in submit_list):
+                    messagebox.showwarning("Offline!", "Since you are in offline mode you must provide at least one matching to the question before you can submit it to your deck!")
+                    
                     return
                 
-            # determine if we need a correct answer choice and some more incorrect answer choices
-            if not "C1" in submit_list.keys() and "A1" in submit_list.keys():
-                # set the environment up
-                system = """You are an assistant knowledgeable in many academic subjects. In particular, the user is a student who will specify what domain they request that you fetch knowledge from, while also providing a small paragraph of context that helps you generate helpful responses for the user.
-
-                            In particular, your responses are tailored to generating practice test questions, whether that be filling in missing parts of user-created questions such as picking correct answers, generating incorrect answers, or writing an explanation as to why the correct answer is the correct answer. You will also be providing full-on new practice questions for the user to practice with based on a subset of questions picked and the ascribed domain and context be provided with every input.
-
-                            The input you receive will also be minimal to help with processing and costs associated. You will ALWAYS be given a domain, denoted with the prefix "Domain:" for which the question comes from. In addition, you will ALWAYS be given a subset of "Context:" for which you should prioritize when synthesizing your answer. Lastly, you will receive one of the following:
-                            - A question with 1 incorrect answer choice, followed by a request for a correct answer choice (provide 1 correct answer choice, along with 2 additional incorrect answer choices in that order)
-                                - Ex. output:
-                                    C~ They can be passed as arguments to other functions, returned as values from other functions, assigned to variables, and stored in data structures
-                                    I~ They can only be assigned to variables and stored in data structures
-                                    I~ They can only be passed as arguments to other functions
-                            
-                            Since your output will be fed directly to a program to be parsed, you MUST be STRICT with what you output, and be as BRIEF as possible. for ALL outputs, your responses MUST ADHERE TO THE ABOVE FORMAT NO MATTER WHAT
-                            
-                            Please keep in mind you are free to use any characters in your response as the delimiters will help the program figure out what field means what."""
+                # if offline inform about no automatic explaination generation
+                if self.settings['Offline'] and submit_list['Explaination'].strip() == '':
+                    messagebox.showinfo("Offline!", "Inital explaination generation isnt performed in offline mode. Please reedit this question if you would like to provide an explaination of your own!")
+                    
+                    submit_list['Explaination'] = "No explaination was generated :("
                 
-                # get the required context for the prompt
-                background = "Question: " + remove_backticked_imbeds(submit_list["Question"]) + "\nIncorrect Answer: " + remove_backticked_imbeds(submit_list["A1"]) 
-                request = "Please provide the correct answer, followed by 2 incorrect answers to the given question, given one of the incorrect answers"
-                
-                # prompt for answer choices
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system + system_img},
-                        {"role": "user", "content": domain + context + background + request} if img_link == "" else {"role": "user", 
-                                                                                                                     "content": [
-                                                                                                                         {"type": "text", "text": domain + context + background + request},
-                                                                                                                         {
-                                                                                                                             "type": "image_url",
-                                                                                                                             "image_url": {
-                                                                                                                                 "url": img_link
-                                                                                                                             }
-                                                                                                                         }
-                                                                                                                         ]},
+                # skip calls if offline
+                if not self.settings['Offline']:
+                    # Fill for missing choices using the multiple-choice helper function
+                    fill_matching_options(submit_list, bool(self.question.scramble.get()), self.parent.domain, self.parent.context, self.settings["API Key"], self.settings["Model"])
                         
-                    ]
-                )
-                
-                # wrap in try/except to flag an error if the api fails
-                try:
-                    # iterate through the output
-                    lines = response.choices[0].message.content.split('\n')
-                    cur_key = ""
-                    num_cor = 0
-                    num_incor = self.question.answers
-                    for line in lines:
-                        # check if this line contains a correct answer
-                        if line.strip().startswith('C~'):
-                            # get the new key
-                            num_cor += 1
-                            cur_key = "C" + str(num_cor)
-                            
-                            # set this line into the question dictionary
-                            submit_list[cur_key] = line[2:].strip()
-                        # check if this line contains a incorrect answer
-                        elif line.strip().startswith('I~'):
-                            # get the new key
-                            num_incor += 1
-                            cur_key = "A" + str(num_incor)
-                            
-                            # set this line into the question dictionary
-                            submit_list[cur_key] = line[2:].strip()
-                        # otherwise is continuation of previous line
-                        else:
-                            # if we enter here without a key, something went wrong
-                            if cur_key == "":
-                                raise Exception()
-                            
-                            # append this line to the previous on a newline
-                            submit_list[cur_key] = "\n" + line.strip()
-                except Exception as e:
-                    # prompt error and prevent submit
-                    messagebox.showerror(":(", "There was an error calling the API, try rewording your question and/or answer choices")
-                
+                    # if no explaination exists for the correct answer to this question, or one has been requested via a flag, generate an explaination
+                    if submit_list["Explaination"] == "" or self.refresh_explaination_flag:
+                        generate_explaination_for_question(submit_list, self.parent.domain, self.parent.context, self.settings["API Key"], self.settings["Model"])
+            case "Ess":  
+                # check if we have guidelines specified if we are offline
+                if self.settings['Offline'] and "Guidelines" == "":
+                    messagebox.showwarning("Offline!", "Since you are in offline mode you must provide the guidelines before submitting this question to your deck!")
+                    
                     return
                 
-            # if no explaination exists for the correct answer to this question, or one has been requested via a flag, generate an explaination
-            if submit_list["Explaination"] == "" or self.refresh_explaination_flag:
-                # set the environment up
-                system = r"""You are an assistant knowledgeable in many academic subjects. In particular, the user is a student who will specify what domain they request that you fetch knowledge from, while also providing a small paragraph of context that helps you generate helpful responses for the user.
-
-                            In particular, your responses are tailored to generating practice test questions, whether that be filling in missing parts of user-created questions such as picking correct answers, generating incorrect answers, or writing an explanation as to why the correct answer is the correct answer. You will also be providing full-on new practice questions for the user to practice with based on a subset of questions picked and the ascribed domain and context be provided with every input.
-
-                            The input you receive will also be minimal to help with processing and costs associated. You will ALWAYS be given a domain, denoted with the prefix "Domain:" for which the question comes from. In addition, you will ALWAYS be given a subset of "Context:" for which you should prioritize when synthesizing your answer. Lastly, you will receive one of the following:
-                            - A question followed by its correct answer(s) (provide the explaination for why the correct answer is correct in the context of the question).
-                                - Ex. output:
-                                    E~ A heap is a data structure used for collections where the maximal or minimal element is frequently accessed from the collection, as it performs this operations in near constant time, so a heap would be the best data structure for implementing A* pathfinding.
-
-                            For your explaination, make sure it is INSIGHTFUL and HELPFUL for the student, DO NOT USE ELEMENTS OF THE QUESTION OR ANSWERS WORD FOR WORD IN YOUR RESPONSE.
-                            Since your output will be fed directly to a program to be parsed, you MUST be STRICT with what you output, and be as BRIEF as possible. for ALL outputs, your responses MUST ADHERE TO THE ABOVE FORMAT NO MATTER WHAT
-                            
-                            Please keep in mind you are free to use any characters in your response as the delimiters will help the program figure out what field means what."""
-                
-                # get the required context for the prompt
-                correct_answers = "Correct Answers: "
-                for key, value in submit_list.items():
-                    if "C" in key:
-                        correct_answers += value + ", "
-                background = "Question: " + remove_backticked_imbeds(submit_list['Question']) + "\n" + remove_backticked_imbeds(correct_answers) + "\n"
-                request = "Please provide the explaination for why the correct answers are correct in the context of the question"
-                
-                # prompt for answer choices
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system + system_img},
-                        {"role": "user", "content": domain + context + background + request} if img_link == "" else {"role": "user", 
-                                                                                                                     "content": [
-                                                                                                                         {"type": "text", "text": domain + context + background + request},
-                                                                                                                         {
-                                                                                                                             "type": "image_url",
-                                                                                                                             "image_url": {
-                                                                                                                                 "url": img_link
-                                                                                                                             }
-                                                                                                                         }
-                                                                                                                         ]},
-                        
-                    ]
-                )
-                
-                # wrap in try/except to flag an error if the api fails
-                try:
-                    # push to explaination
-                    submit_list['Explaination'] = response.choices[0].message.content[2:].strip()
-                except Exception as e:
-                    # prompt error and prevent submit
-                    messagebox.showerror(":(", "There was an error calling the API, try rewording your question and/or answer choices")
-                
-                    return
-        
+                # skip calls if offline
+                if not self.settings['Offline']:
+                    # Fill for missing choices using the multiple-choice helper function
+                    fill_essay_guidelines(submit_list, self.parent.domain, self.parent.context, self.settings["API Key"], self.settings["Model"])
+                          
+        print(submit_list)
         # check if we are making a new question or pushing information back to a previous index
         if int(submit_list['Q']) <= self.parent.q_count.get():
             # push this content to the preexisting clickable reference that already exists at this index
@@ -940,6 +668,7 @@ class BuilderFrame(ctk.CTkFrame):
         
         # clear entry for question
         self.question.destroy()
+        self.question_type_index.set("MC")
         self.question = MultipleChoice(self.question_frame, self.modified)
         self.is_modified = False
         self.reset_explaination_refresh()
@@ -1015,7 +744,7 @@ class QuestionFrame(ctk.CTkFrame):
         
     def fetch_question_information(self):
         # first check if the user is sure they want to swap from the current question if it is modified
-        if(self.builder_frame.is_modified and messagebox.askyesno("Hold it!", "You changes have not been saved yet! Do you want to save them first?")):
+        if(self.builder_frame.is_modified and messagebox.askyesno("Warning", "You changes have not been saved yet! Do you want to save them first?")):
             self.builder_frame.submit_question()
             
             return
@@ -1023,6 +752,7 @@ class QuestionFrame(ctk.CTkFrame):
         # set the current question index appropriately in the builder
         self.builder_frame.q_index = self.content['Q']
         self.builder_frame.question_index.set('Question ' + str(self.builder_frame.q_index))
+        self.builder_frame.question_type_index.set(self.content['Type'])
         
         # update button to reflect that this question is being edited
         self.builder_frame.submit_question_button.configure(text="Update Question")
@@ -1031,13 +761,21 @@ class QuestionFrame(ctk.CTkFrame):
         
         # clear the entry for the question, and instead create a new question using this content
         self.builder_frame.question.destroy()
-        self.builder_frame.question = MultipleChoice(self.builder_frame.question_frame, self.builder_frame.modified, self.content)
-        self.builder_frame.enable_explaination_refresh()
+        match self.content['Type']:
+            case "MC":
+                self.builder_frame.question = MultipleChoice(self.builder_frame.question_frame, self.builder_frame.modified, self.content)
+                self.builder_frame.enable_explaination_refresh()
+            case "TD":
+                self.builder_frame.question = TermDefinition(self.builder_frame.question_frame, self.builder_frame.modified, self.content)
+                self.builder_frame.enable_explaination_refresh()
+            case "Ess":
+                self.builder_frame.question = Essay(self.builder_frame.question_frame, self.builder_frame.modified, self.content)
+                self.builder_frame.reset_explaination_refresh()
         self.builder_frame.is_modified = False
         
     def delete_question(self):
         # first check if the user is sure they want to delete this question
-        if(not messagebox.askyesno("Wait one Sec!", "Are you sure you want to delete this question? You cannot undo this action")):
+        if(not messagebox.askyesno("Warning!", "Are you sure you want to delete this question? You cannot undo this action")):
             return
         
         # remove this question from the side list
@@ -1250,6 +988,258 @@ class MultipleChoice(ctk.CTkFrame):
                 break
             # update the index to the current index in the list (adjusted from correct answer count)
             ans_field.update_index(i - self.correct_answers)
+            
+class TermDefinition(ctk.CTkFrame):
+    def __init__(self, parent, modified_func, context = None):
+        super().__init__(parent, fg_color='transparent')
+        
+        # pack at the top of the frame 3 radio buttons allowing for questions to be "forced" to be MC, FRQ, or either
+        self.forced = tk.IntVar()
+        self.forced.set(0)
+        self.forced_to_be = ctk.CTkFrame(self, fg_color='transparent')
+        self.frq = ctk.CTkRadioButton(self.forced_to_be, radiobutton_height=9, radiobutton_width=9, text="Force FRQ", variable=self.forced, font=(FONT, SMALL_FONT_SIZE), value=2)
+        self.frq.pack(side='right')
+        self.mc = ctk.CTkRadioButton(self.forced_to_be, radiobutton_height=9, radiobutton_width=9, text="Force Match", variable=self.forced, font=(FONT, SMALL_FONT_SIZE), value=1)
+        self.mc.pack(side='right')
+        self.either = ctk.CTkRadioButton(self.forced_to_be, radiobutton_height=9, radiobutton_width=9, text="Either", variable=self.forced, font=(FONT, SMALL_FONT_SIZE), value=0)
+        self.either.pack(side='right')
+        self.forced_to_be.pack(expand=True, fill='both')
+        
+        # create a frame for the question entry
+        self.question = ctk.CTkFrame(self, fg_color='transparent')
+        self.question.columnconfigure(0, weight=3)
+        self.question.columnconfigure(1, weight=12)
+        self.question.rowconfigure(0,weight=1)
+        self.question_label = ctk.CTkLabel(self.question, text="Question: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+        self.question_label.grid(row=0, column=0, sticky='nw', pady=10)
+        self.question_entry = ctk.CTkTextbox(self.question, font=(FONT, NORMAL_FONT_SIZE), height=20)
+        self.question_entry.grid(column=1, row=0, sticky='ew')
+        self.question_entry.bind('<KeyRelease>', modified_func)
+        self.question.pack(fill='x', side='top', pady=2)
+        
+        # create a scrollable frame for the term-definition matchings
+        self.scroll_answers = ctk.CTkScrollableFrame(self, fg_color='transparent')
+        self.scroll_answers.pack(fill='x')
+        
+        self.is_scrambled = ctk.CTkFrame(self, fg_color='transparent')
+        self.is_scrambled.columnconfigure((0, 1), weight=1, uniform='a')
+        self.is_scrambled.columnconfigure(2, weight=6, uniform='a')
+        self.is_scrambled.rowconfigure(0, weight=1)
+        self.scrambled_label = ctk.CTkLabel(self.is_scrambled, text="Is Scrambled: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+        self.scrambled_label.grid(row=0, column=0)
+        self.scramble = tk.IntVar()
+        self.scramble.set(0)
+        self.scrabled_toggle = ctk.CTkSwitch(self.is_scrambled, text="", variable=self.scramble, onvalue=1, offvalue=0)
+        self.scrabled_toggle.grid(row=0, column=1)
+        self.is_scrambled.pack(fill='x')
+        
+        # data
+        self.matching_guis = []
+        self.gui_held_information = []
+        self.explaination = ""
+        self.matchings = 0
+        self.modified_func = modified_func
+        
+        # create a button for adding a matching
+        self.matching_guis.append(ctk.CTkButton(self.scroll_answers, fg_color=WARNING, hover_color=WARNING_HOVER, text_color=BG, text='+', font=(FONT, NORMAL_FONT_SIZE, 'bold'), command=self.add_matching))
+        self.matching_guis[0].pack(fill='x', side='top', pady=2)
+        
+        # freeze frame: are we taking context? and if so we fill our fields with said context first!
+        if context != None:
+            # get the variable fields from the context, this one is easy
+            for key, value in context.items():
+                # skip index
+                if key == 'Q':
+                    continue
+                
+                # is this key a question key
+                if key == 'Question':
+                    # create and assign to the question variables
+                    self.gui_held_information.append(tk.StringVar()) # Holds the information written in the question entry field
+                    self.gui_held_information[0].set(value)
+                    
+                    # force in text and update
+                    self.question_entry.insert(tk.END, value)
+                    force_update_textbox_height(self.question_entry, 465, value)
+                    
+                # is this key a term
+                if "T" in key and key != "Type":
+                    # get the index of the key
+                    term_index = int(key[1:])
+                    
+                    # if this index is smaller than the current matching count, inflate it to match the index
+                    while self.matchings < term_index:
+                        self.add_matching()
+                    
+                    # force update the data variable associated with this answer
+                    self.gui_held_information[term_index][0].set(value)
+                    self.matching_guis[term_index - 1].term_entry.insert(tk.END, value)
+                    force_update_textbox_height(self.matching_guis[term_index - 1].term_entry, 385, value)
+                
+                # is this key a definition
+                if "D" in key:
+                    # get the index of the key
+                    definition_index = int(key[1:])
+                    
+                    # if this index is smaller than the current matching count, inflate it to match the index
+                    while self.matchings < definition_index:
+                        self.add_matching()
+                    
+                    # force update the data variable associated with this answer
+                    self.gui_held_information[definition_index][1].set(value)
+                    self.matching_guis[definition_index - 1].definition_entry.insert(tk.END, value)
+                    force_update_textbox_height(self.matching_guis[definition_index - 1].definition_entry, 385, value)
+                    
+                # is this the explaination for the correct answer
+                if key == 'Explaination':
+                    # assign to the explaintation field
+                    self.explaination = value
+                    
+                # is this the forced state of the question?
+                if key == 'Forced':
+                    # update the radio button controlled variable
+                    self.forced.set(int(value))
+                
+        else: # new question, empty fields
+            self.gui_held_information.append(tk.StringVar()) # Holds the information written in the question entry field
+        
+        # bind the event to the question text box that resizes it on keystrokes
+        self.question_entry.bind('<KeyRelease>', lambda x:adjust_textbox_height(x, self.question_entry, 465, self.gui_held_information[0]))
+        
+        # pack the whole enchilatta
+        self.pack(fill='x')
+        
+    def add_matching(self):
+        # remove the matching button from the current matching count index + 1 and shift it to the next index in the list
+        self.matching_guis[self.matchings].pack_forget()
+        self.matching_guis.insert(self.matchings + 1, self.matching_guis[self.matchings])
+        
+        # create the new string vars that this field will take on
+        # we have to check for an incorrect answer, since we no longer have a guarenteed pivot
+        if(self.matchings == 0):
+            self.gui_held_information.append((tk.StringVar(), tk.StringVar()))
+        else:
+            self.gui_held_information.insert(self.matchings + 1, (tk.StringVar(), tk.StringVar()))
+        
+        # inc. correct answers
+        self.matchings += 1
+        
+        # pack the correct answer entry field
+        self.matching_guis[self.matchings - 1] = TermMatchingField(self.scroll_answers, self.matchings, lambda x: self.remove_matching(x), self.gui_held_information[self.matchings][0], self.gui_held_information[self.matchings][1], self.modified_func)
+        self.matching_guis[self.matchings].pack(fill='x', side='top', pady=2)
+        
+    def remove_matching(self, index):
+        # unpack and remove the current answer choice, reflect in answers
+        self.matching_guis[index - 1].pack_forget()
+        self.matching_guis.remove(self.matching_guis[index - 1])
+        self.gui_held_information.remove(self.gui_held_information[index])
+        self.matchings -= 1
+        
+        # update the indices of the answer choices
+        for i, ans_field in enumerate(self.matching_guis):
+            # pass when above correct answers
+            if (i + 1) > self.matchings:
+                break
+            # update the index to the current index in the list
+            ans_field.update_index(i + 1)
+        
+class Essay(ctk.CTkFrame):
+    def __init__(self, parent, modified_func, context = None):
+        super().__init__(parent, fg_color='transparent')
+        
+        # pack at the top of the frame 3 radio buttons allowing for different grading modes
+        self.format = tk.IntVar()
+        self.format.set(0)
+        self.format_to_be = ctk.CTkFrame(self, fg_color='transparent')
+        self.explain = ctk.CTkRadioButton(self.format_to_be, radiobutton_height=9, radiobutton_width=9, text="Explain", variable=self.format, font=(FONT, SMALL_FONT_SIZE), value=0, command=self.enable_code_prompt)
+        self.code = ctk.CTkRadioButton(self.format_to_be, radiobutton_height=9, radiobutton_width=9, text="Code", variable=self.format, font=(FONT, SMALL_FONT_SIZE), value=1, command=self.enable_code_prompt)
+        self.prove = ctk.CTkRadioButton(self.format_to_be, radiobutton_height=9, radiobutton_width=9, text="Prove", variable=self.format, font=(FONT, SMALL_FONT_SIZE), value=2, command=self.enable_code_prompt)
+        self.prove.pack(side='right')
+        self.code.pack(side='right')
+        self.explain.pack(side='right')
+        self.format_to_be.pack(expand=True, fill='both')
+        
+        # create a frame for the question entry
+        self.question = ctk.CTkFrame(self, fg_color='transparent')
+        self.question.columnconfigure(0, weight=3)
+        self.question.columnconfigure(1, weight=12)
+        self.question.rowconfigure(0,weight=1)
+        self.question_label = ctk.CTkLabel(self.question, text="Question: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+        self.question_label.grid(row=0, column=0, sticky='nw', pady=10)
+        self.question_entry = ctk.CTkTextbox(self.question, font=(FONT, NORMAL_FONT_SIZE), height=20)
+        self.question_entry.grid(column=1, row=0, sticky='ew')
+        self.question_entry.bind('<KeyRelease>', modified_func)
+        self.question.pack(fill='x', side='top', pady=2)
+        
+        # create a wide textbox for the guidelines for the question
+        self.guidelines = ctk.CTkFrame(self, fg_color='transparent')
+        self.guidelines.columnconfigure(0, weight=3)
+        self.guidelines.columnconfigure(1, weight=12)
+        self.guidelines.rowconfigure(0,weight=1)
+        self.guidelines_label = ctk.CTkLabel(self.guidelines, text="Guidelines: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+        self.guidelines_label.grid(row=0, column=0, sticky='nw', pady=10)
+        self.guidelines_entry = ctk.CTkTextbox(self.guidelines, font=(FONT, NORMAL_FONT_SIZE), height=140)
+        self.guidelines_entry.grid(column=1, row=0, sticky='ew')
+        self.guidelines_entry.bind('<KeyRelease>', modified_func)
+        self.guidelines.pack(fill='x', side='top', pady=2)
+        
+        # create a frame for the coding language if relevant
+        self.code_lang = ctk.CTkFrame(self, fg_color='transparent')
+        self.code_lang.columnconfigure(0, weight=3)
+        self.code_lang.columnconfigure(1, weight=12)
+        self.code_lang.rowconfigure(0,weight=1)
+        self.code_lang_label = ctk.CTkLabel(self.code_lang, text="Code Language: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+        self.code_lang_label.grid(row=0, column=0, sticky='nw', pady=10)
+        self.code_lang_entry = ctk.CTkTextbox(self.code_lang, font=(FONT, NORMAL_FONT_SIZE), height=20)
+        self.code_lang_entry.grid(column=1, row=0, sticky='ew')
+        self.code_lang_entry.bind('<KeyRelease>', modified_func)
+        
+        self.modified_func = modified_func
+        
+        # freeze frame: are we taking context? and if so we fill our fields with said context first!
+        if context != None:
+            # get the variable fields from the context, this one is easy
+            for key, value in context.items():
+                # skip index
+                if key == 'Q':
+                    continue
+                
+                # is this key a question key
+                if key == 'Question':
+                    # force in text and update
+                    self.question_entry.insert(tk.END, value)
+                    force_update_textbox_height(self.question_entry, 465, value)
+                    
+                # is this key a guidelines key
+                if key == 'Guidelines':
+                    # force in text and update
+                    self.guidelines_entry.insert(tk.END, value)
+                    force_update_textbox_height(self.guidelines_entry, 465, value)
+                    
+                # is this key a language key
+                if key == 'Language':
+                    # force in text and update
+                    self.code_lang_entry.insert(tk.END, value)
+                    force_update_textbox_height(self.code_lang_entry, 465, value)
+                    
+                # is this the format of the question?
+                if key == 'Format':
+                    # update the radio button controlled variable
+                    self.format.set(int(value))
+        
+        # bind the event to the question text box that resizes it on keystrokes
+        self.question_data = tk.StringVar()
+        self.question_entry.bind('<KeyRelease>', lambda x:adjust_textbox_height(x, self.question_entry, 465, self.question_data))
+        
+        # pack the whole enchilatta
+        self.pack(fill='x')
+        
+    def enable_code_prompt(self):
+        # determine if we need to render the code prompt
+        if self.format.get() == 1:
+            self.code_lang.pack(fill='x', side='top', pady=2)
+        else:
+            self.code_lang.pack_forget()
         
 class AnswerField(ctk.CTkFrame):
     def __init__(self, parent, index, prior, remove_func, variable, modified_func):
@@ -1279,6 +1269,40 @@ class AnswerField(ctk.CTkFrame):
         # update the variables associated with knowing this answer choice's index
         self.index = index
         self.answer_choice_num.set("Ans. C. " + str(index) + ":")
+        
+class TermMatchingField(ctk.CTkFrame):
+    def __init__(self, parent, index, remove_func, term_variable, definition_variable, modified_func):
+        super().__init__(parent, fg_color='transparent')
+        
+        # varible to denote answer choice number
+        self.index = index
+        self.answer_choice_num = tk.StringVar()
+        self.answer_choice_num.set("Term-Def. " + str(index) + ":")
+        
+        # create the block that contains the answer field
+        self.columnconfigure(0, weight=5,uniform='a')
+        self.columnconfigure(1, weight=6,uniform='a')
+        self.columnconfigure(2, weight=12,uniform='a')
+        self.columnconfigure(3, weight=2,uniform='a')
+        self.rowconfigure(0,weight=1,uniform='b')
+        self.matching_label = ctk.CTkLabel(self, text="Question: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE), textvariable=self.answer_choice_num)
+        self.matching_label.grid(row=0, column=0, sticky='nw', pady=5)
+        self.term_entry = ctk.CTkTextbox(self, font=(FONT, NORMAL_FONT_SIZE), height=20)
+        self.term_entry.grid(column=1, row=0, sticky='ew', padx=10)
+        self.term_entry.bind('<KeyRelease>', lambda x:adjust_textbox_height(x, self.term_entry, 385, term_variable))
+        self.term_entry.bind('<KeyRelease>', modified_func)
+        self.definition_entry = ctk.CTkTextbox(self, font=(FONT, NORMAL_FONT_SIZE), height=20)
+        self.definition_entry.grid(column=2, row=0, sticky='ew', padx=10)
+        self.definition_entry.bind('<KeyRelease>', lambda x:adjust_textbox_height(x, self.definition_entry, 385, definition_variable))
+        self.definition_entry.bind('<KeyRelease>', modified_func)
+        self.delete_button = ctk.CTkButton(self, fg_color='transparent', text='X', text_color=DARK, hover_color=PRIMARY, font=(FONT, NORMAL_FONT_SIZE, 'bold'), command=lambda:remove_func(self.index))
+        self.delete_button.grid(column=3, row=0, sticky='snew')
+        self.pack(fill='x', side='top', pady=2)
+        
+    def update_index(self, index):
+        # update the variables associated with knowing this answer choice's index
+        self.index = index
+        self.answer_choice_num.set("Term-Def. " + str(index) + ":")
         
 class CorrectAnswerField(AnswerField):
     def __init__(self, parent, index, prior, remove_func, variable, modified_func):
