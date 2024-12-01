@@ -2,14 +2,14 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import messagebox
 from options import *
-from openai import OpenAI
 import random
 from PIL import Image
 from color_lerp import *
-import Levenshtein as lev
 import requests
 from io import BytesIO
 import matplotlib.pyplot as plt
+from QAPI import *
+import threading
 
 def create_embed_frame(parent, source, wrap_limit, image_limit):
     # get imbeds from source
@@ -99,105 +99,20 @@ def is_number(s):
     except ValueError:
         return False
 
-def numaric_comparision_grading(answers, correct_answers):
-    # get a list of similarities and copy the collections
-    similarities = []
-    ans = answers.copy()
-    cor_ans = correct_answers.copy()
-    
-    # iterate through the numbers in the ans list
-    for answer in ans:
-        # check if this answer is numaric
-        if not is_number(answer):
-            similarities.append(0.0)
-            
-            continue
-        
-        most_similar = ""
-        best_similarity = 0.0
-        # iterate through the cor_ans list
-        for correct in cor_ans:
-            # get the percent distance from this answer
-            distance = abs(float(answer) - float(correct)) / float(correct)
-            # get a ratio of value with a 5% confidence
-            similarity = 1 - min(distance / 0.05, 1)
-            
-            # compare with the score already logged for this answer
-            if similarity > best_similarity:
-                # save as best, remember with what string
-                best_similarity = similarity
-                most_similar = correct
-                
-        # check if a record was found to be similar
-        if best_similarity == 0.0:
-            # append a score of 0
-            similarities.append(0.0)
-            
-            # continue
-            continue
-                
-        # record this similarity and remove the most similar string from answer collection
-        similarities.append(best_similarity)
-        cor_ans.remove(most_similar)
-        
-    # return results
-    return similarities
-
-def answer_comparision_grading(answers, correct_answers):
-    # get a list of similarities and copy the lowercase conversion collections
-    similarities = []
-    ans = [ans.lower() for ans in answers]
-    cor_ans = [ans.lower() for ans in correct_answers]
-    
-    # iterate through the strings in the ans list
-    for answer in ans:
-        most_similar = ""
-        best_similarity = 0.0
-        best_diff = 0.0
-        
-        # iterate through the cor_ans list
-        for correct in cor_ans:
-            # get the Levenshtein similarity score between these 2 strinsg
-            distance = lev.distance(answer, correct)
-            max_length = max(len(answer), len(correct))
-            difference = (distance / max_length)
-            # get a ratio of value with 25% confidence
-            similarity = 1 - min(difference/.25, 1)
-            
-            # compare with the score already logged for this answer
-            if similarity > best_similarity:
-                # save as best, remember with what string
-                best_similarity = similarity
-                most_similar = correct
-                best_diff = difference
-                
-        # check if a record was found to be similar
-        if best_similarity == 0.0:
-            # append a score of 0
-            similarities.append(0.0)
-            
-            # continue
-            continue
-                
-        # record this similarity and remove the most similar string from answer collection and this answer
-        similarities.append(best_similarity)
-        cor_ans.remove(most_similar)
-        
-    # return results
-    return similarities
-
 def wrap_text(text, max_width):
-    words = text.split(' ')
+    og_lines = text.split('\n')
     lines = []
-    current_line = words[0]
 
-    for word in words[1:]:
-        if len(current_line + ' ' + word) <= max_width:
-            current_line += ' ' + word
-        else:
-            lines.append(current_line)
-            current_line = word
-    lines.append(current_line)
+    for line in og_lines:
+        current_line = ""
+        words = line.split(' ')
+        for word in words:
+            if len(current_line + ' ' + word) <= max_width:
+                current_line += ' ' + word
+            else:
+                lines.append(current_line)
+                current_line = word
+        lines.append(current_line)
     return '\n'.join(lines)
 
 def format_seconds(seconds):
@@ -209,7 +124,7 @@ def format_seconds(seconds):
         return "{:2}:{:02}".format(minutes, seconds)
 
 class Quiz(ctk.CTkFrame):
-    def __init__(self, parent, data, question_bank, question_count, ai_prop, frq_prop, per_page, time_limit, get_builder, modified, settings):
+    def __init__(self, parent, data, question_bank, question_count, ai_prop, frq_prop, per_page, time_limit, get_builder, modified, settings, additive_ai_questions):
         super().__init__(parent, fg_color='transparent')
         
         # data
@@ -229,6 +144,10 @@ class Quiz(ctk.CTkFrame):
         
         # get the number of questions to generate from chatGPT
         self.ai_q_count = round(self.question_count * self.ai_prop)
+        
+        # if we are generating AI questions ontop of the original questions, add the ai_q_count BACK to the question count
+        if additive_ai_questions:
+            self.question_count += self.ai_q_count
         
         # get the AI generated questions, make a copy for one pool without questions
         self.bank = self.question_bank.copy()
@@ -255,7 +174,7 @@ class Quiz(ctk.CTkFrame):
             # first, decide wheither or not to pick an ai question using the ai prop
             # this choice is random until we need to meet the budget for ai questions requested
             roll_em = random.random()
-            if (random.random() <= self.ai_prop and ai_questions) or self.question_count - len(self.questions) == len(ai_questions):
+            if (random.random() <= min(0.5, self.ai_prop) and ai_questions) or self.question_count - len(self.questions) == len(ai_questions):
                 # pick an ai question and remove it from the ai bank
                 cur_question = random.choice(ai_questions)
                 ai_questions.remove(cur_question)
@@ -264,7 +183,15 @@ class Quiz(ctk.CTkFrame):
                 # pick a random question and remove it from the question bank
                 cur_question = random.choice(self.bank)
                 self.bank.remove(cur_question)
-            self.questions.append(QuizQuestion(self.question_frame, self, cur_question, i, roll_em == 2, roll_em <= self.frq_prop))
+                
+            # construct the question object matching that question's type!!
+            match cur_question['Type']:
+                case "MC":
+                    self.questions.append(MultipleChoiceQuestion(self.question_frame, self, cur_question, i, roll_em == 2, roll_em <= self.frq_prop))
+                case "TD":
+                    self.questions.append(TermDefinitionQuestion(self.question_frame, self, cur_question, i, roll_em == 2, roll_em <= self.frq_prop))
+                case "Ess":
+                    self.questions.append(EssayQuestion(self.question_frame, self, cur_question, i, roll_em == 2, self.domain, self.context, self.settings))
             
         # create and pack a button for each question in the entire quiz, even if they may not be on the current page
         self.question_buttons = []
@@ -385,200 +312,12 @@ class Quiz(ctk.CTkFrame):
             self.grade_button.pack(side='left', padx=10, pady=5, anchor='center')
         
     def generate_questions(self):
-        # create a list to store the ai generated questions
-        ai_question_list = []
-        
-        # break function immediately if 0 ai questions are to be generated
-        if self.ai_q_count == 0:
-            return ai_question_list
-        
-        # get a process count
-        processed = 0
-        
-        # configure client
-        client = OpenAI(api_key=self.settings['API Key'])
-        domain = "Domain: " + self.domain + "\n"
-        model = "gpt-4o-mini" if self.settings['Model'] == '3.5' else "gpt-4o"
-        warn_missing_explainations = False
-        
-        # we define the context by selecting a random span of context cut words from said context
-        context_words = self.context.split(" ")
-        start_point = random.choice(range(0, max(len(context_words) - int(self.settings['ContextCut']), 1)))
-        context = "Context: " + " ".join(context_words[start_point:min(start_point+int(self.settings['ContextCut']), len(context_words))]) + "\n"
-        
-        # iterate over the number of questions to generate (x{batch})
-        for __ in range ((self.ai_q_count - 1) // self.settings['Batch'] + 1):
-            # get the number of questions to prompt for
-            prompt_count = min(self.ai_q_count - processed, self.settings['Batch'])
-            
-            # get a textual representation of the prompt count to emphasize the amount requested
-            if prompt_count == 1:
-                num_of_questions = "ONE"
-            elif prompt_count == 2:
-                num_of_questions = "TWO"
-            elif prompt_count == 3:
-                num_of_questions = "THREE"
-            elif prompt_count == 4:
-                num_of_questions = "FOUR"
-            elif prompt_count == 5:
-                num_of_questions = "FIVE"
-            
-            # pull 3 sample questions to prompt from the slide deck
-            sample = random.sample(self.bank, 3)
-            questions = ""
-            for question in sample:
-                for key, value in question.items():
-                    # see if we are writing the question
-                    if key == "Question":
-                        questions += "Q~ " + value + "\n"
-                    elif "C" in key:
-                        questions += "C~ " + value + "\n"
-                    elif "A" in key:
-                        questions += "I~ " + value + "\n"
-                    elif key == "Explaination":
-                        questions += "E~ " + value + "\n"
-                # append seperator
-                questions += "\n"
-            
-            # set the environment up
-            system1 = """You are an assistant knowledgeable in many academic subjects. In particular, the user is a student who will specify what domain they request that you fetch knowledge from, while also providing a small paragraph of context that helps you generate helpful responses for the user.
-
-                        In particular, your responses are tailored to generating practice test questions, whether that be filling in missing parts of user-created questions such as picking correct answers, generating incorrect answers, or writing an explanation as to why the correct answer is the correct answer. You will also be providing full-on new practice questions for the user to practice with based on a subset of questions picked and the ascribed domain and context be provided with every input.
-
-                        The input you receive will also be minimal to help with processing and costs associated. You will ALWAYS be given a domain, denoted with the prefix "Domain:" for which the question comes from. In addition, you will ALWAYS be given a subset of "Context:" for which you should prioritize when synthesizing your answer. Lastly, you will receive one of the following:
-                        - The following 3 questions, which are formatted exactly how your output should be formatted (You will provide """+ num_of_questions +""" NEW questions in said format, DO NOT FORGET ANY OF THESE)\n"""
-            system2= """For your explainations, make sure it is INSIGHTFUL and HELPFUL for the student, DO NOT USE ELEMENTS OF THE QUESTION OR ANSWERS WORD FOR WORD IN YOUR RESPONSE.
-                        Since your output will be fed directly to a program to be parsed, you MUST be STRICT with what you output, and be as BRIEF as possible. for ALL outputs, your responses MUST ADHERE TO THE ABOVE FORMAT NO MATTER WHAT
-                        
-                        Please keep in mind you are free to use any characters in your response as the delimiters will help the program figure out what field means what.\n"""
-            
-            # get the required context for the prompt
-            request = "Please provide the requested " + num_of_questions + " questions in the same format as the provided questions were for your reference"
-            
-            # prompt for answer choices
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system1 + questions + system2},
-                    {"role": "user", "content": domain + context + request}
-                ]
-            )
-            
-            # process response
-            # use dictionaries to represent the newly constructed questions
-            cur_question = {}
-            cur_key = ""
-            
-            # split the input by the line
-            lines = response.choices[0].message.content.split('\n')
-            
-            # start parsing
-            # reset answer counts
-            cor_ans = 0
-            incor_ans = 0
-            try:
-                i = int(self.question_bank[-1]['Q']) + processed
-                for line in lines:
-                    # check if the line starts with a question, indicating we are moving to the next question's contents
-                    if line.startswith("Q~"):
-                        # if we have started on a question, add it to our question collection
-                        if cur_question:
-                            ai_question_list.append(cur_question)
-                            
-                        # inc. i, set key
-                        i += 1
-                        cur_key = "Question"
-                        
-                        # reset answer counts
-                        cor_ans = 0
-                        incor_ans = 0
-                            
-                        # start a new question, indexed with i
-                        cur_question = {'Q': str(i)}
-                        
-                        # add a keys to flag that this is an AI generated question
-                        cur_question["AI Generated"] = 'True'
-                        cur_question["Forced"] = '1'
-                        
-                        # write this question to its key, with the prefix removed
-                        cur_question[cur_key] = line[2:].strip()
-                    elif line.startswith('C~'):
-                        # we have hit a correct answer
-                        # create and update key
-                        cor_ans += 1
-                        cur_key = "C" + str(cor_ans)
-                        
-                        cur_question[cur_key] = line[2:].strip()
-                    elif line.startswith('I~'):
-                        # we have hit a incorrect answer
-                        # create and update key
-                        incor_ans += 1
-                        cur_key = "A" + str(incor_ans)
-                        
-                        cur_question[cur_key] = line[2:].strip()
-                    elif line.startswith('E~'):
-                        # we have hit the explaination
-                        # create and update key
-                        cur_key = "Explaination"
-                        
-                        cur_question[cur_key] = line[2:].strip()
-                    elif len(line.strip()) < 1:
-                        # skip empty lines
-                        continue
-                    else:
-                        # check if we even have a key yet
-                        if cur_key != '':
-                            # this line is a continuation from the previous line due to new line, report this
-                            cur_question[cur_key] += "\n" + line
-                        # otherwise skip
-                        else:
-                            continue
-                            
-                # add the last question to the list
-                if cur_question:
-                    ai_question_list.append(cur_question)      
-            except Exception as e:
-                # report error
-                messagebox.showerror("Woops!", "There was an error when generating new questions, some new questions may have been generated, but not enough to meet the quota amount. Sorry about that :p")
-                
-                return []
-                
-            # this check is kinda unstable so uhhhhh
-            try:
-                # before continuing, ensure that this batch was correctly parsed
-                for i in range(processed, processed + prompt_count):
-                    # check for the following keys, error if ANY are missing
-                    if not all(item in ai_question_list[i].keys() for item in ['Question', 'C1', 'A1', 'Explaination']):
-                        # before all is naught, if the explaination is missing just simply use a placeholder, its not required!
-                        if all(item in ai_question_list[i].keys() for item in ['Question', 'C1', 'A1']):
-                            ai_question_list[i]["Explaination"] = "No explaination was generated :("
-                            
-                            # flag a report for clarity when done
-                            warn_missing_explainations = True
-                            
-                            # continue
-                            continue
-                        
-                        # report error
-                        messagebox.showerror("Life happens!", "There was an error parsing this batch of questions, all passing batches will be included in this quiz. Sorry about that :p")
-                        
-                        # return all valids up to this point
-                        return ai_question_list[:processed-1]
-            except Exception as e:
-                # report error
-                messagebox.showerror("Life happens!", "There was an error parsing this batch of questions, all passing batches will be included in this quiz. Sorry about that :p")
-                
-            # update process count
-            processed += prompt_count
-            
-        if(warn_missing_explainations):
-            messagebox.showwarning("Heads up!", "A batch of questions was passed, but their explainations will have to be generated after your quiz!")
-            
-        return ai_question_list
+        # Using the API, in parallel generate enough AI questions to meet the quota internally defined
+        return batch_generate_questions(self.question_bank, self.ai_q_count, self.domain, self.context, self.settings["API Key"], self.settings["Model"])
         
     def grade_quiz(self, forced = False):
         # ask if the user wants to submit their quiz for sure
-        if not forced and not messagebox.askyesno("Last Call!", "Are you sure you want to submit your quiz for a final grade?"):
+        if not forced and not messagebox.askyesno("Warning!", "Are you sure you want to submit your quiz for a final grade?"):
             return
         
         # flag the state of being graded
@@ -595,10 +334,23 @@ class Quiz(ctk.CTkFrame):
         # iterate through the quiz questions and have them grade themselves, then get their point value
         total = 0
         out_of_total = 0
+        n = len(self.questions)
+        threads = []
+        while n > 0:
+            for i in range(MAX_THREADS if n // MAX_THREADS > 0 else n):
+                threads.append(threading.Thread(target=self.questions[i].compute_grade))
+                threads[i].start()
+                print("Created thread for:", self.questions[i])
+            for i in range(MAX_THREADS if n // MAX_THREADS > 0 else n):
+                print(f"Waiting for thread {i}:")
+                threads[i].join()
+            n -= MAX_THREADS
+            
+        # then get the total score, but schedule the renders so they can happen concurrently?
         for question in self.questions:
-            question.grade()
             total += question.score
             out_of_total += question.point_total
+            self.after(0, question.render_grade)
         percentage = round(total / out_of_total, 4)
             
         # get the letter grade
@@ -652,29 +404,21 @@ class Quiz(ctk.CTkFrame):
         return_button.pack(padx=10, pady=5, anchor='w')
         grade_frame.pack(fill='x', before=self.question_nav)
             
-        
-class QuizQuestion(ctk.CTkFrame):
+class MultipleChoiceQuestion(ctk.CTkFrame):
     def __init__(self, parent_frame, parent, question, index, isai, isfrq):
         super().__init__(parent_frame, fg_color=LIGHT, corner_radius=25)
         self.parent = parent
         
         # question data
-        self.selected_ans = tk.StringVar()
         self.point_total = 10
-        self.score = 0
-        self.correct_ans = []
-        self.isnumaric = True
-        for key, value in question.items():
-            if "C" in key:
-                self.correct_ans.append(value)
-                if not is_number(value) and self.isnumaric:
-                    self.isnumaric = False
+        self.score = -1
                 
         self.explaination = question['Explaination']
         self.isfrq = True if int(question['Forced']) == 2 else (False if int(question['Forced']) == 1 else isfrq)
         self.isai = isai
         self.index = index
         self.question_data = question
+        self.parsed_answers = []
         
         # create a frame for packing the question header
         self.question_header_frame = ctk.CTkFrame(self, fg_color='transparent')
@@ -704,19 +448,23 @@ class QuizQuestion(ctk.CTkFrame):
         
         # branch based on being an frq question
         self.answer_widgets = []
+        self.selected = []
         if not self.isfrq:
             # next branch based on having 1 or more correct answers
             if not "C2" in question.keys():
+                # the selected list functions as a singleton variable
+                self.selected += [tk.StringVar()]
+                
                 # single correct multiple choice
                 # create the radio buttons used to get the student's answer
                 answer_choices = []
-                answer_choices.append(ctk.CTkRadioButton(self, radiobutton_height=12, radiobutton_width=12, text=wrap_text(question["C1"], 160), variable=self.selected_ans, font=(FONT, NORMAL_FONT_SIZE), value=question["C1"], command=self.has_answer))
-                for key, value in question.items():
+                answer_choices.append(ctk.CTkRadioButton(self, radiobutton_height=12, radiobutton_width=12, text=wrap_text(question["C1"], 160), variable=self.selected[0], font=(FONT, NORMAL_FONT_SIZE), value=question["C1"], command=self.has_answer))
+                for key, ___ in question.items():
                     if "A" in key and not "AI" in key:
-                        answer_choices.append(ctk.CTkRadioButton(self, radiobutton_height=12, radiobutton_width=12, text=wrap_text(question[key], 160), variable=self.selected_ans, font=(FONT, NORMAL_FONT_SIZE), value=question[key], command=self.has_answer))
+                        answer_choices.append(ctk.CTkRadioButton(self, radiobutton_height=12, radiobutton_width=12, text=wrap_text(question[key], 160), variable=self.selected[0], font=(FONT, NORMAL_FONT_SIZE), value=question[key], command=self.has_answer))
                         
                 # randomly pick from the answer choices and pack in a random order
-                for i in range(len(answer_choices)):
+                for _ in range(len(answer_choices)):
                     cur_choice = random.choice(answer_choices)
                     answer_choices.remove(cur_choice)
                     self.answer_widgets.append(cur_choice)
@@ -725,15 +473,14 @@ class QuizQuestion(ctk.CTkFrame):
                 # multiple correct multiple choice
                 # create the checkboxes used to get the student's answer
                 answer_choices = []
-                self.selected = []
-                for key, value in question.items():
+                for key, ___ in question.items():
                     if ("A" in key and not "AI" in key) or "C" in key:
                         self.selected.append(tk.StringVar())
                         self.selected[-1].set("NanX")
                         answer_choices.append(ctk.CTkCheckBox(self, checkbox_height=12, checkbox_width=12, text=wrap_text(question[key], 160), variable=self.selected[-1], font=(FONT, NORMAL_FONT_SIZE), onvalue=question[key], offvalue="NanX", command=self.has_answer))
                         
                 # randomly pick from the answer choices and pack in a random order
-                for i in range(len(answer_choices)):
+                for _ in range(len(answer_choices)):
                     cur_choice = random.choice(answer_choices)
                     answer_choices.remove(cur_choice)
                     self.answer_widgets.append(cur_choice)
@@ -741,13 +488,12 @@ class QuizQuestion(ctk.CTkFrame):
         else:
             # single/multiple correct frq(s)
             # create free response boxes equal to the number of correct answers
-            self.selected = []
-            for key, value in question.items():
+            for key, val in question.items():
                 if "C" in key:
-                    self.selected.append(ctk.CTkTextbox(self, height=20, width=150 if self.isnumaric else 400, font=(FONT, NORMAL_FONT_SIZE)))
+                    self.selected.append(ctk.CTkTextbox(self, height=20, width=150 if is_number(val) else 400, font=(FONT, NORMAL_FONT_SIZE)))
                     self.answer_widgets.append(self.selected[-1])
                     self.selected[-1].bind('<KeyRelease>', self.has_answer)
-                    self.selected[-1].pack(padx=10, pady=5, anchor='w')
+                    self.selected[-1].pack(padx=10, anchor='w')
 
     def flag_question(self):
         # toggle the flag for this question
@@ -755,157 +501,98 @@ class QuizQuestion(ctk.CTkFrame):
             # unflag
             del self.question_data["Flag"]
             self.flag_button.configure(image=ctk.CTkImage(Image.open(resource_path("Unflagged.png")).resize((32,32)), size=(32,32)))
+            if self.score == -1:
+                self.has_answer()
         else:
             # flag
             self.question_data["Flag"] = 'True'
             self.flag_button.configure(image=ctk.CTkImage(Image.open(resource_path("Flagged.png")).resize((32,32)), size=(32,32)))
+            if self.score == -1:
+                self.parent.question_buttons[self.index].configure(fg_color=FLAG_HIGHLIGHT)
+                self.parent.question_buttons[self.index].configure(hover_color=FLAG_HIGHLIGHT_HOVER)
             
                   
     def has_answer(self, event = None):
-        # switch on being an frq
-        if not self.isfrq:
-            # switch on having 1 or more correct answers
-            if not "C2" in self.question_data.keys():
-                # call from a radio button, who cannot be unchecked so always will be answered
-                # report this in associated button
-                self.parent.question_buttons[self.index].configure(fg_color=SELECT_BG)
+        # having a flag enabled superceeds all of these options:
+        if not "Flag" in self.question_data:
+            # switch on being an frq
+            if not self.isfrq:
+                # switch on having 1 or more correct answers
+                if not "C2" in self.question_data.keys():
+                    # check if a radio button has been pressed
+                    if self.selected[0].get():
+                        # report having answer
+                        self.parent.question_buttons[self.index].configure(fg_color=SELECT_BG)
+                        self.parent.question_buttons[self.index].configure(hover_color=SELECT_BG_HOVER)
+                    else:
+                        # report not having answer
+                        self.parent.question_buttons[self.index].configure(fg_color=BG)
+                        self.parent.question_buttons[self.index].configure(hover_color=BG_HOVER)
+                else:
+                    # this question has an answer if its selection array isnt empty
+                    if not all(selected.get() == "NanX" for selected in self.selected):
+                        # report having answer
+                        self.parent.question_buttons[self.index].configure(fg_color=SELECT_BG)
+                        self.parent.question_buttons[self.index].configure(hover_color=SELECT_BG_HOVER)
+                    else:
+                        # report not having answer
+                        self.parent.question_buttons[self.index].configure(fg_color=BG)
+                        self.parent.question_buttons[self.index].configure(hover_color=BG_HOVER)
             else:
-                # this question has an answer if its selection array isnt empty
-                if not all(selected.get() == "NanX" for selected in self.selected):
+                # this question has an answer if all answer fields have content
+                if all(entry.get('1.0', 'end-1c') for entry in self.answer_widgets):
                     # report having answer
                     self.parent.question_buttons[self.index].configure(fg_color=SELECT_BG)
+                    self.parent.question_buttons[self.index].configure(hover_color=SELECT_BG_HOVER)
                 else:
                     # report not having answer
                     self.parent.question_buttons[self.index].configure(fg_color=BG)
-        else:
-            # this question has an answer if all answer fields have content
-            if all(entry.get('1.0', 'end-1c') for entry in self.answer_widgets):
-                # report having answer
-                self.parent.question_buttons[self.index].configure(fg_color=SELECT_BG)
-            else:
-                # report not having answer
-                self.parent.question_buttons[self.index].configure(fg_color=BG)
+                    self.parent.question_buttons[self.index].configure(hover_color=BG_HOVER)
+                
+        # also recompute a parsable list of answers that we use when grading now
+        self.parsed_answers = [tk_string.get() for tk_string in self.selected] if not self.isfrq else [entry.get('1.0', 'end-1c') for entry in self.selected]
         
-    def grade(self):
+    def compute_grade(self):
+        # get the score using the grading helper function implemented in the API
+        self.score = grade_multiple_choice_question(self.question_data, self.parsed_answers, self.isfrq)
+        
+    def render_grade(self):
         # draw divider in question cell
         ctk.CTkFrame(self, fg_color=SELECT_BG, height=2).pack(expand=True, fill='x', padx=10, pady=2)
         
         # disable all answer widgets
         for widget in self.answer_widgets:
             widget.configure(state='disabled')
+            
+        # reflect
+        self.point_count.configure(text="Points: " + str(self.score) + "/" + str(self.point_total))
         
-        # branch based on being an frq question
-        if not self.isfrq:
-            # next branch based on having 1 or more correct answers
-            if len(self.correct_ans) == 1:
-                # single correct multiple choice
-                # compare the value of the selected answer against the actual correct answer
-                if self.selected_ans.get() == self.correct_ans[0]:
-                    # reward point total
-                    self.score = self.point_total
-                    
-                    # reflect
-                    self.point_count.configure(text="Points: " + str(self.score) + "/" + str(self.point_total))
-                    
-                    # pull appropriate picture
-                    grade_pic = ctk.CTkImage(Image.open(resource_path("Correct Checkmark.png")).resize((96,96)), size=(96,96))
-                    
-                    # color button appropriately
-                    self.parent.question_buttons[self.index].configure(fg_color=SUCCESS)
-                    self.parent.question_buttons[self.index].configure(hover_color=SUCCESS_HOVER)
-                else:
-                    # pull appropriate picture
-                    grade_pic = ctk.CTkImage(Image.open(resource_path("Incorrect Cross.png")).resize((96,96)), size=(96,96))
-                    
-                    # color button appropriately
-                    self.parent.question_buttons[self.index].configure(fg_color=PRIMARY)
-                    self.parent.question_buttons[self.index].configure(hover_color=PRIMARY_HOVER)
-            else:
-                # multiple correct multiple choice
-                # get the actual selected values
-                selection = []
-                for var in self.selected:
-                    if var.get() != "NanX":
-                        selection.append(var.get())
-                selection = [item for item in selection if item]
+        # pull appropriate picture
+        if self.score / self.point_total == 1:
+            grade_pic = ctk.CTkImage(Image.open(resource_path("Correct Checkmark.png")).resize((96,96)), size=(96,96))
                 
-                # create an intersection between the correct answers list and selected lists
-                intersection = [value for value in selection if value in self.correct_ans]
+            # color button appropriately
+            self.parent.question_buttons[self.index].configure(fg_color=SUCCESS)
+            self.parent.question_buttons[self.index].configure(hover_color=SUCCESS_HOVER)
+        elif self.score / self.point_total == 0:
+            grade_pic = ctk.CTkImage(Image.open(resource_path("Incorrect Cross.png")).resize((96,96)), size=(96,96))
                 
-                # tabulate penalty if selection was greater than the actual number of correct answers
-                penalty = max(len(selection) - len(self.correct_ans), 0)
-                
-                # compare the number of elements in the intersection against the total number of correct answers to reward point totals
-                self.score = round(self.point_total * (max(len(intersection) - penalty, 0)/len(self.correct_ans)))
-                
-                # reflect
-                self.point_count.configure(text="Points: " + str(self.score) + "/" + str(self.point_total))
-                
-                # pull appropriate picture
-                if self.score / self.point_total == 1:
-                    grade_pic = ctk.CTkImage(Image.open(resource_path("Correct Checkmark.png")).resize((96,96)), size=(96,96))
-                    
-                    # color button appropriately
-                    self.parent.question_buttons[self.index].configure(fg_color=SUCCESS)
-                    self.parent.question_buttons[self.index].configure(hover_color=SUCCESS_HOVER)
-                elif self.score / self.point_total == 0:
-                    grade_pic = ctk.CTkImage(Image.open(resource_path("Incorrect Cross.png")).resize((96,96)), size=(96,96))
-                    
-                    # color button appropriately
-                    self.parent.question_buttons[self.index].configure(fg_color=PRIMARY)
-                    self.parent.question_buttons[self.index].configure(hover_color=PRIMARY_HOVER)
-                else:
-                    grade_pic = ctk.CTkImage(Image.open(resource_path("Partial Equals.png")).resize((96,96)), size=(96,96))
-                    
-                    # color button appropriately
-                    self.parent.question_buttons[self.index].configure(fg_color=PARTIAL)
-                    self.parent.question_buttons[self.index].configure(hover_color=PARTIAL_HOVER)
+            # color button appropriately
+            self.parent.question_buttons[self.index].configure(fg_color=PRIMARY)
+            self.parent.question_buttons[self.index].configure(hover_color=PRIMARY_HOVER)
         else:
-            # single/multiple correct frq(s)
-            # get the actual selected values
-            selection = []
-            for entry in self.selected:
-                selection.append(entry.get('1.0', 'end-1c').strip().lower())
-            
-            # determine if we are grading by numbers or similarity
-            if not self.isnumaric:
-                # perform answer comparision grading between the typed answers and the correct answers
-                similarities = answer_comparision_grading(selection, self.correct_ans)
-            else:
-                # perform numaric comparision grading between numaric answers and their most closely matching correct answers
-                similarities = numaric_comparision_grading(selection, self.correct_ans)
+            grade_pic = ctk.CTkImage(Image.open(resource_path("Partial Equals.png")).resize((96,96)), size=(96,96))
                 
-            # compare the number of elements in the intersection against the total number of correct answers to reward point totals
-            self.score = round(sum([self.point_total/len(selection) * x for x in similarities]))
-            
-            # reflect
-            self.point_count.configure(text="Points: " + str(self.score) + "/" + str(self.point_total))
-            
-            # pull appropriate picture
-            if self.score / self.point_total == 1:
-                grade_pic = ctk.CTkImage(Image.open(resource_path("Correct Checkmark.png")).resize((96,96)), size=(96,96))
-                    
-                # color button appropriately
-                self.parent.question_buttons[self.index].configure(fg_color=SUCCESS)
-                self.parent.question_buttons[self.index].configure(hover_color=SUCCESS_HOVER)
-            elif self.score / self.point_total == 0:
-                grade_pic = ctk.CTkImage(Image.open(resource_path("Incorrect Cross.png")).resize((96,96)), size=(96,96))
-                    
-                # color button appropriately
-                self.parent.question_buttons[self.index].configure(fg_color=PRIMARY)
-                self.parent.question_buttons[self.index].configure(hover_color=PRIMARY_HOVER)
-            else:
-                grade_pic = ctk.CTkImage(Image.open(resource_path("Partial Equals.png")).resize((96,96)), size=(96,96))
-                    
-                # color button appropriately
-                self.parent.question_buttons[self.index].configure(fg_color=PARTIAL)
-                self.parent.question_buttons[self.index].configure(hover_color=PARTIAL_HOVER)
+            # color button appropriately
+            self.parent.question_buttons[self.index].configure(fg_color=PARTIAL)
+            self.parent.question_buttons[self.index].configure(hover_color=PARTIAL_HOVER)
                 
         # get the correct answers as a single string
         correct_ans_str = ""
-        for i, correct_ans in enumerate(self.correct_ans):
+        correct_answers = [self.question_data[key] for key in self.question_data if key.startswith("C")]
+        for i, correct_ans in enumerate(correct_answers):
             correct_ans_str += correct_ans
-            if i != len(self.correct_ans) - 1:
+            if i != len(correct_answers) - 1:
                 correct_ans_str += ", "
                 
         # reformat
@@ -926,3 +613,344 @@ class QuizQuestion(ctk.CTkFrame):
         explain_frame.grid(column=1, row=0, sticky='snew', padx=10)
         explaination_frame.pack(expand=True, fill='x', padx=10)
         
+class TermDefinitionQuestion(ctk.CTkFrame):
+    def __init__(self, parent_frame, parent, question, index, isai, isfrq):
+        super().__init__(parent_frame, fg_color=LIGHT, corner_radius=25)
+        self.parent = parent
+        
+        # question data
+        self.point_total = 10
+        self.score = -1
+                
+        self.explaination = question['Explaination']
+        self.isfrq = True if int(question['Forced']) == 2 else (False if int(question['Forced']) == 1 else isfrq)
+        self.isai = isai
+        self.index = index
+        self.question_data = question
+        self.parsed_answers = []
+        
+        # create a frame for packing the question header
+        self.question_header_frame = ctk.CTkFrame(self, fg_color='transparent')
+        self.question_header_frame.pack(expand=True, fill='both')
+        
+        # draw the question header text
+        self.question_header = ctk.CTkLabel(self.question_header_frame, text="Question " + str(index + 1), fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'))
+        self.question_header.pack(side='left',padx=10, pady=10)
+        self.flag_button = ctk.CTkButton(self.question_header_frame, text='', width=32, height=32, fg_color='transparent', hover_color=LIGHT, command=self.flag_question, image=ctk.CTkImage(Image.open(resource_path("Unflagged.png")).resize((32,32)), size=(32,32)))
+        self.flag_button.pack(side='right',padx=2)
+        self.point_count = ctk.CTkLabel(self.question_header_frame, text="Points: 0/" + str(self.point_total), fg_color='transparent', text_color=SELECT_BG, font=(FONT, NORMAL_FONT_SIZE))
+        self.point_count.pack(side='right',padx=2)
+        
+        # if this is an AI generated question, draw an icon to signal such
+        if(isai):
+            ai_enhanced = ctk.CTkImage(Image.open(resource_path("AI Enhanced.png")).resize((32,32)), size=(32,32))
+            self.ai_indicator = ctk.CTkLabel(self.question_header_frame, image=ai_enhanced, text='')
+            self.ai_indicator.pack(side='left',padx=10, pady=10)
+        
+        # draw the question text out, and imbed when prompted
+        self.question = create_embed_frame(self, question["Question"], 170, 512)
+        self.question.pack(padx=5, pady=10, anchor='w')
+        
+        # begin with the answer choice widgets
+        self.header_frame = ctk.CTkFrame(self, fg_color='transparent')
+        self.header_frame.rowconfigure(0, weight=1)
+        self.header_frame.columnconfigure(0, weight=1, uniform='a')
+        self.header_frame.columnconfigure(1, weight=2, uniform='a')
+        self.term_header = ctk.CTkLabel(self.header_frame, text="Term:", fg_color='transparent', justify='left', font=(FONT, NORMAL_FONT_SIZE))
+        self.term_header.grid(row=0, column=0, sticky='w')
+        self.definition_header = ctk.CTkLabel(self.header_frame, text="Definition:", fg_color='transparent', justify='left', font=(FONT, NORMAL_FONT_SIZE))
+        self.definition_header.grid(row=0, column=1, sticky='e')
+        self.header_frame.pack(fill='x', expand=True, padx=10)
+        
+        # branch based on being an frq question
+        self.answer_widgets = []
+        self.selected = []
+        
+        # construct widgets for all the matchings listed in the question data
+        terms = [self.question_data[key] for key in self.question_data if (key.startswith("T") and key != "Type")]
+        matchings = len(terms)
+        matching_widgets = []
+        for i in range(matchings):
+            # create the base frame for the matching components
+            matching_frame = ctk.CTkFrame(self, fg_color='transparent')
+            matching_widgets.append(matching_frame)
+            matching_frame.rowconfigure(0, weight=1)
+            matching_frame.columnconfigure(0, weight=1, uniform='a')
+            matching_frame.columnconfigure(1, weight=2, uniform='a')
+            
+            # depending on if the question is frq will determine the input and how data is stored
+            if self.isfrq:
+                # append widget to selection, create a textbox that will be read at grade time
+                self.selected.append(ctk.CTkTextbox(matching_frame, height=20, width=150, font=(FONT, NORMAL_FONT_SIZE)))
+                self.selected[-1].bind('<KeyRelease>', self.has_answer)
+                self.selected[-1].grid(row=0, column=0, padx=10, sticky='w')
+                
+                # also append to the answer widgets so we can disable it later
+                self.answer_widgets.append(self.selected[-1])
+            else:
+                # append variable to selection
+                self.selected.append(tk.StringVar())
+                self.selected[-1].set("---")
+                
+                # create a combobox containing only the terms that belong to this question
+                self.answer_widgets.append(ctk.CTkComboBox(matching_frame, font=(FONT, NORMAL_FONT_SIZE), values=["---"] + terms, command=self.has_answer, variable=self.selected[-1]))
+                self.answer_widgets[-1].grid(row=0, column=0, padx=10, pady=5, sticky='w')
+            definition_text = ctk.CTkLabel(matching_frame, fg_color='transparent', justify='left', text=wrap_text(self.question_data['D' + str(i + 1)], 80), font=(FONT, NORMAL_FONT_SIZE))
+            definition_text.grid(row=0, column=1, padx=10, sticky='e')
+            
+        # shuffle the order of the matching widgets and pack them in this new order
+        random.shuffle(matching_widgets)
+        matching_widgets[0].pack(fill='x', expand=True, padx=10, anchor='w')
+        for i in range(1, len(matching_widgets)):
+            matching_widgets[i].pack(fill='x', expand=True, padx=10, anchor='w', after=matching_widgets[i-1])
+
+    def flag_question(self):
+        # toggle the flag for this question
+        if "Flag" in self.question_data:
+            # unflag
+            del self.question_data["Flag"]
+            self.flag_button.configure(image=ctk.CTkImage(Image.open(resource_path("Unflagged.png")).resize((32,32)), size=(32,32)))
+            if self.score == -1:
+                self.has_answer()
+        else:
+            # flag
+            self.question_data["Flag"] = 'True'
+            self.flag_button.configure(image=ctk.CTkImage(Image.open(resource_path("Flagged.png")).resize((32,32)), size=(32,32)))
+            if self.score == -1:
+                self.parent.question_buttons[self.index].configure(fg_color=FLAG_HIGHLIGHT)
+                self.parent.question_buttons[self.index].configure(hover_color=FLAG_HIGHLIGHT_HOVER)
+                  
+    def has_answer(self, event = None):
+        # having a flag enabled superceeds all of these options:
+        if not "Flag" in self.question_data:
+            # switch on being an frq
+            if not self.isfrq:
+                # if no combobox is empty, then this question is answered
+                if not any(selected.get() == "---" for selected in self.selected):
+                    # report having answer
+                    self.parent.question_buttons[self.index].configure(fg_color=SELECT_BG)
+                    self.parent.question_buttons[self.index].configure(hover_color=SELECT_BG_HOVER)
+                else:
+                    # report not having answer
+                    self.parent.question_buttons[self.index].configure(fg_color=BG)
+                    self.parent.question_buttons[self.index].configure(hover_color=BG_HOVER)
+            else:
+                # this question has an answer if all answer fields have content
+                if all(entry.get('1.0', 'end-1c') for entry in self.selected):
+                    # report having answer
+                    self.parent.question_buttons[self.index].configure(fg_color=SELECT_BG)
+                    self.parent.question_buttons[self.index].configure(hover_color=SELECT_BG_HOVER)
+                else:
+                    # report not having answer
+                    self.parent.question_buttons[self.index].configure(fg_color=BG)
+                    self.parent.question_buttons[self.index].configure(hover_color=BG_HOVER)
+                
+        # also recompute a parsable list of answers that we use when grading now
+        self.parsed_answers = [tk_string.get() for tk_string in self.selected] if not self.isfrq else [entry.get('1.0', 'end-1c') for entry in self.selected]
+        
+    def compute_grade(self):
+        # get the score using the grading helper function implemented in the API
+        self.score = grade_matching_question(self.question_data, self.parsed_answers, self.isfrq)
+        
+    def render_grade(self):
+        # draw divider in question cell
+        ctk.CTkFrame(self, fg_color=SELECT_BG, height=2).pack(expand=True, fill='x', padx=10, pady=2)
+        
+        # disable all answer widgets
+        for widget in self.answer_widgets:
+            widget.configure(state='disabled')
+
+        # reflect
+        self.point_count.configure(text="Points: " + str(self.score) + "/" + str(self.point_total))
+        
+        # pull appropriate picture
+        if self.score / self.point_total == 1:
+            grade_pic = ctk.CTkImage(Image.open(resource_path("Correct Checkmark.png")).resize((96,96)), size=(96,96))
+                
+            # color button appropriately
+            self.parent.question_buttons[self.index].configure(fg_color=SUCCESS)
+            self.parent.question_buttons[self.index].configure(hover_color=SUCCESS_HOVER)
+        elif self.score / self.point_total == 0:
+            grade_pic = ctk.CTkImage(Image.open(resource_path("Incorrect Cross.png")).resize((96,96)), size=(96,96))
+                
+            # color button appropriately
+            self.parent.question_buttons[self.index].configure(fg_color=PRIMARY)
+            self.parent.question_buttons[self.index].configure(hover_color=PRIMARY_HOVER)
+        else:
+            grade_pic = ctk.CTkImage(Image.open(resource_path("Partial Equals.png")).resize((96,96)), size=(96,96))
+                
+            # color button appropriately
+            self.parent.question_buttons[self.index].configure(fg_color=PARTIAL)
+            self.parent.question_buttons[self.index].configure(hover_color=PARTIAL_HOVER)
+                
+        # get the term definition matchings as a single string
+        matchings = sum(1 for key in self.question_data if key.startswith("D"))
+        correct_match_str = ""
+        for i in range(matchings):
+            correct_match_str += self.question_data["T" + str(i + 1)] + ": " + self.question_data["D" + str(i + 1)]
+            if i != matchings - 1:
+                correct_match_str += ", "
+                
+        # reformat
+        correct_match_str = wrap_text(correct_match_str, 120)
+                
+        # create a frame for the explaination
+        explaination_frame = ctk.CTkFrame(self, fg_color='transparent')
+        explaination_frame.columnconfigure(0, weight=4, uniform='a')
+        explaination_frame.columnconfigure(1, weight=30, uniform='a')
+        explaination_frame.rowconfigure(0, weight=1, uniform='a')
+        grade_label = ctk.CTkLabel(explaination_frame, image=grade_pic, text='')
+        grade_label.grid(column=0, row=0, sticky='w', padx=10)
+        explain_frame = ctk.CTkFrame(explaination_frame, fg_color='transparent')
+        ctk.CTkLabel(explain_frame, text="Correct Matchings: " + correct_match_str, fg_color='transparent', justify='left', font=(FONT, NORMAL_FONT_SIZE)).pack(padx=10, pady=5, anchor='nw')
+        
+        # write the explanation with imbeds if added
+        create_embed_frame(explain_frame, "Explaination: " + self.explaination, 120, 128).pack(padx=10, pady=5, anchor='nw')
+        explain_frame.grid(column=1, row=0, sticky='snew', padx=10)
+        explaination_frame.pack(expand=True, fill='x', padx=10)
+        
+class EssayQuestion(ctk.CTkFrame):
+    def __init__(self, parent_frame, parent, question, index, isai, domain, context, settings):
+        super().__init__(parent_frame, fg_color=LIGHT, corner_radius=25)
+        self.parent = parent
+        
+        # question data
+        self.point_total = 10
+        self.score = -1
+                
+        self.isai = isai
+        self.index = index
+        self.question_data = question
+        self.parsed_answer = ""
+        self.domain = domain
+        self.context = context
+        self.settings = settings
+        
+        # create a frame for packing the question header
+        self.question_header_frame = ctk.CTkFrame(self, fg_color='transparent')
+        self.question_header_frame.pack(expand=True, fill='both')
+        
+        # draw the question header text
+        self.question_header = ctk.CTkLabel(self.question_header_frame, text="Question " + str(index + 1), fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'))
+        self.question_header.pack(side='left',padx=10, pady=10)
+        self.flag_button = ctk.CTkButton(self.question_header_frame, text='', width=32, height=32, fg_color='transparent', hover_color=LIGHT, command=self.flag_question, image=ctk.CTkImage(Image.open(resource_path("Unflagged.png")).resize((32,32)), size=(32,32)))
+        self.flag_button.pack(side='right',padx=2)
+        self.point_count = ctk.CTkLabel(self.question_header_frame, text="Points: 0/" + str(self.point_total), fg_color='transparent', text_color=SELECT_BG, font=(FONT, NORMAL_FONT_SIZE))
+        self.point_count.pack(side='right',padx=2)
+        
+        # if this is an AI generated question, draw an icon to signal such
+        if(isai):
+            ai_enhanced = ctk.CTkImage(Image.open(resource_path("AI Enhanced.png")).resize((32,32)), size=(32,32))
+            self.ai_indicator = ctk.CTkLabel(self.question_header_frame, image=ai_enhanced, text='')
+            self.ai_indicator.pack(side='left',padx=10, pady=10)
+        
+        # draw the question text out, and imbed when prompted
+        self.question = create_embed_frame(self, question["Question"], 170, 512)
+        self.question.pack(padx=5, pady=10, anchor='w')
+        
+        # head the text segement with what kind of response that we are looking for
+        self.input_box_header = ctk.CTkFrame(self, fg_color='transparent')
+        match int(self.question_data["Format"]):
+            case 0:
+                respond_text = "Explaination:"
+            case 1:
+                respond_text = f"Program, written in {self.question_data["Language"]}:"
+            case 2:
+                respond_text = "Proof:"
+        self.paragraph_header = ctk.CTkLabel(self.input_box_header, text=respond_text, fg_color='transparent', justify='left', font=(FONT, NORMAL_FONT_SIZE))
+        self.paragraph_header.pack(padx=10, side='left')
+        self.input_box_header.pack(expand=True, fill='x')
+        
+        # construct the paragraph entry widget
+        self.answer_widget = ctk.CTkTextbox(self, height=150, width=600, font=(FONT, NORMAL_FONT_SIZE))
+        self.answer_widget.bind('<KeyRelease>', self.has_answer)
+        self.answer_widget.pack(fill='x', expand=True, padx=10, pady=5, anchor='w')
+
+    def flag_question(self):
+        # toggle the flag for this question
+        if "Flag" in self.question_data:
+            # unflag
+            del self.question_data["Flag"]
+            self.flag_button.configure(image=ctk.CTkImage(Image.open(resource_path("Unflagged.png")).resize((32,32)), size=(32,32)))
+            if self.score == -1:
+                self.has_answer()
+        else:
+            # flag
+            self.question_data["Flag"] = 'True'
+            self.flag_button.configure(image=ctk.CTkImage(Image.open(resource_path("Flagged.png")).resize((32,32)), size=(32,32)))
+            if self.score == -1:
+                self.parent.question_buttons[self.index].configure(fg_color=FLAG_HIGHLIGHT)
+                self.parent.question_buttons[self.index].configure(hover_color=FLAG_HIGHLIGHT_HOVER)
+            
+                  
+    def has_answer(self, event = None):
+        # having a flag enabled superceeds all of these options:
+        if not "Flag" in self.question_data:
+            # this question has an answer if the paragraph field has content
+            if self.answer_widget.get('1.0', 'end-1c'):
+                # report having answer
+                self.parent.question_buttons[self.index].configure(fg_color=SELECT_BG)
+                self.parent.question_buttons[self.index].configure(hover_color=SELECT_BG_HOVER)
+            else:
+                # report not having answer
+                self.parent.question_buttons[self.index].configure(fg_color=BG)
+                self.parent.question_buttons[self.index].configure(hover_color=BG_HOVER)
+                
+        # also push the text box content 
+        self.parsed_answer = self.answer_widget.get('1.0', 'end-1c')
+        
+    def compute_grade(self):
+        # check if we are in offline mode, as we cannot grade the question due to its dependence on an API call!
+        if not self.settings['Offline']:
+            # get the score using the grading helper function implemented in the API
+            self.score = grade_essay_question(self.question_data, self.parsed_answer, self.domain, self.context, self.settings["API Key"], self.settings["Model"])
+        else:
+            # default to perfect score
+            self.score = 10
+        
+    def render_grade(self):
+        # draw divider in question cell
+        ctk.CTkFrame(self, fg_color=SELECT_BG, height=2).pack(expand=True, fill='x', padx=10, pady=2)
+        
+        self.answer_widget.configure(state='disabled')
+
+        # reflect
+        self.point_count.configure(text="Points: " + str(self.score) + "/" + str(self.point_total))
+        
+        # pull appropriate picture
+        if self.score / self.point_total == 1:
+            grade_pic = ctk.CTkImage(Image.open(resource_path("Correct Checkmark.png")).resize((96,96)), size=(96,96))
+                
+            # color button appropriately
+            self.parent.question_buttons[self.index].configure(fg_color=SUCCESS)
+            self.parent.question_buttons[self.index].configure(hover_color=SUCCESS_HOVER)
+        elif self.score / self.point_total == 0:
+            grade_pic = ctk.CTkImage(Image.open(resource_path("Incorrect Cross.png")).resize((96,96)), size=(96,96))
+                
+            # color button appropriately
+            self.parent.question_buttons[self.index].configure(fg_color=PRIMARY)
+            self.parent.question_buttons[self.index].configure(hover_color=PRIMARY_HOVER)
+        else:
+            grade_pic = ctk.CTkImage(Image.open(resource_path("Partial Equals.png")).resize((96,96)), size=(96,96))
+                
+            # color button appropriately
+            self.parent.question_buttons[self.index].configure(fg_color=PARTIAL)
+            self.parent.question_buttons[self.index].configure(hover_color=PARTIAL_HOVER)
+                
+        # create a frame for the explaination
+        explaination_frame = ctk.CTkFrame(self, fg_color='transparent')
+        explaination_frame.columnconfigure(0, weight=4, uniform='a')
+        explaination_frame.columnconfigure(1, weight=30, uniform='a')
+        explaination_frame.rowconfigure(0, weight=1, uniform='a')
+        grade_label = ctk.CTkLabel(explaination_frame, image=grade_pic, text='')
+        grade_label.grid(column=0, row=0, sticky='w', padx=10)
+        explain_frame = ctk.CTkFrame(explaination_frame, fg_color='transparent')
+        ctk.CTkLabel(explain_frame, text="Guidelines: " + wrap_text(self.question_data["Guidelines"], 120), fg_color='transparent', justify='left', font=(FONT, NORMAL_FONT_SIZE)).pack(padx=10, pady=5, anchor='nw')
+        
+        # write the explanation with imbeds if added
+        create_embed_frame(explain_frame, "Explaination: " + self.question_data["Explaination"], 120, 128).pack(padx=10, pady=5, anchor='nw')
+        explain_frame.grid(column=1, row=0, sticky='snew', padx=10)
+        explaination_frame.pack(expand=True, fill='x', padx=10)
+        
+        # clear the explaination
+        self.question_data["Explaination"] = "Essay questions cannot be graded in offline mode, but I'm sure you got it right :)"

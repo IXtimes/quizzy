@@ -3,11 +3,7 @@ import tkinter as tk
 from tkinter import messagebox
 from tkinter import filedialog
 from options import *
-from openai import OpenAI
 from PIL import Image, ImageFont
-import json
-import random
-import requests
 from QAPI import *
 
 def remove_backticked_imbeds(s):
@@ -214,7 +210,7 @@ class QuizFrame(ctk.CTkFrame):
         
     def make_quiz(self, ai_setting):
         # if the ai_setting is > 0, prompt for saving first since the program could crash
-        if(ai_setting > 0 and messagebox.askyesno("Thought you should know!", "Prompting may cause the program to crash and lose your changes so far, so its recommended to save first before generating a quiz with AI enhanced questions!")):
+        if(ai_setting > 0 and messagebox.askyesno("Notice!", "Prompting may cause the program to crash and lose your changes so far, so its recommended to save first before generating a quiz with AI enhanced questions!")):
             # call save deck, if it fails exit
             if not self.parent.save_deck():
                 return
@@ -224,7 +220,15 @@ class QuizFrame(ctk.CTkFrame):
         content = []
         for question in self.parent.saved_questions:
             content.append(question.content)
-        counts = (self.question_count.get(), self.frq_prop.get(), round(ai_setting * 33.3) / 100.0, self.per_page.get(), self.parent.modified, self.timer.get())
+        quiz_properties = {
+            "question_count": self.question_count.get(), 
+            "frq_prop": self.frq_prop.get(), 
+            "ai_settings": round(ai_setting * 33.3) / 100.0, 
+            "questions_per_page": self.per_page.get(), 
+            "was_modified": self.parent.modified, 
+            "time_limit": self.timer.get(),
+            "ai_questions_are_added": bool(self.add_ai.get())
+        }
         
         # quickly place in the overall builder a disclaimer
         cover = ctk.CTkFrame(self.parent, fg_color=BG, corner_radius=0)
@@ -237,31 +241,25 @@ class QuizFrame(ctk.CTkFrame):
         cover.place(anchor='center', relwidth=1, relheight=1, rely=0.5, relx=0.5)
         
         # send to the quiz builder
-        self.after(100, lambda:self.get_quiz(data, content, counts, self.settings))
+        self.after(100, lambda:self.get_quiz(data, content, quiz_properties, self.settings))
         
     def check_for_valid_gen(self, *args):
         # check if this change in question count changes the quiz condition
-        condition_changed = self.quiz_condition != (self.parent.q_count.get() >= 3)
-        print(self.quiz_condition)
-        print(self.parent.q_count.get() >= 3)
+        condition_changed = self.quiz_condition != (self.parent.q_count.get() >= 1)
         
-        # if we are on a question count of 3 or 4, due to edge case auto flag condition changed
-        if(self.parent.q_count.get() == 3 or self.parent.q_count.get() == 4):
+        # if we are on a question count of 1, due to edge case auto flag condition changed
+        if(self.parent.q_count.get() == 1 or self.parent.q_count.get() == 2):
             condition_changed = True
-        
-        print(condition_changed)
         
         if(condition_changed):
             # check if we have a valid number of questions to generate a practice quiz
-            if(self.parent.q_count.get() < 3):
-                print("Failed race condition")
+            if(self.parent.q_count.get() < 1):
                 for child in self.winfo_children():
                     child.destroy()
                 
                 # undraw the contents of the quiz frame
                 self.draw_quiz_frame(False)
             else:
-                print("Pass race condition")
                 for child in self.winfo_children():
                     child.destroy()
                 
@@ -276,7 +274,7 @@ class QuizFrame(ctk.CTkFrame):
                         button.configure(state='normal')
                         
         # push new condition status
-        self.quiz_condition = self.parent.q_count.get() >= 3
+        self.quiz_condition = self.parent.q_count.get() >= 1
                     
     def draw_quiz_frame(self, state):
         # check if we are drawing the contents of the quiz frame
@@ -286,18 +284,18 @@ class QuizFrame(ctk.CTkFrame):
             self.quiz_maker_label.pack(padx=10, pady=10, anchor='w')
             
             # slider for question count
-            self.question_count.set(3)
-            if self.parent.q_count.get() != 3:
-                self.question_count_frame = ctk.CTkFrame(self, fg_color='transparent')
-                self.q_count_label = ctk.CTkLabel(self.question_count_frame, text="Num Questions: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
-                self.q_count_label.pack(side='left', expand=True, fill='x', padx=10, pady=3)
-                self.q_count_amnt = ctk.CTkTextbox(self.question_count_frame, font=(FONT, NORMAL_FONT_SIZE), height=20)
-                self.q_count_amnt.insert(tk.END, self.question_count_amount.get())
-                self.q_count_slider = ctk.CTkSlider(self.question_count_frame, from_=3, to=self.parent.q_count.get(), variable=self.question_count, command=lambda x:self.get_new_amount(self.q_count_amnt, self.question_count, self.question_count_amount))
-                self.q_count_slider.pack(side='left', expand=True, fill='x', padx=10, pady=3)
-                self.q_count_amnt.pack(side='left', expand=True, fill='x', padx=10, pady=3)
-                self.q_count_amnt.bind("<KeyRelease>", lambda x:self.attempt_pushing_textbox_amount(self.q_count_amnt, self.question_count, self.question_count_amount, 0))
-                self.question_count_frame.pack(padx=10, pady=3)
+            self.question_count.set(1)
+            self.question_count_frame = ctk.CTkFrame(self, fg_color='transparent')
+            self.q_count_label = ctk.CTkLabel(self.question_count_frame, text="Num Questions: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+            self.q_count_label.pack(side='left', expand=True, fill='x', padx=10, pady=3)
+            self.q_count_amnt = ctk.CTkTextbox(self.question_count_frame, font=(FONT, NORMAL_FONT_SIZE), height=20)
+            self.q_count_amnt.insert(tk.END, self.question_count_amount.get())
+            self.q_count_slider = ctk.CTkSlider(self.question_count_frame, from_=1 if self.parent.q_count.get() != 1 else 0, to=self.parent.q_count.get(), variable=self.question_count, command=lambda x:self.get_new_amount(self.q_count_amnt, self.question_count, self.question_count_amount))
+            self.q_count_slider.pack(side='left', expand=True, fill='x', padx=10, pady=3)
+            self.q_count_amnt.pack(side='left', expand=True, fill='x', padx=10, pady=3)
+            self.q_count_amnt.bind("<KeyRelease>", lambda x:self.attempt_pushing_textbox_amount(self.q_count_amnt, self.question_count, self.question_count_amount, 0))
+            self.question_count_frame.pack(padx=10, pady=3)
+            self.get_new_amount(self.q_count_amnt, self.question_count, self.question_count_amount)
             
             # slider for questions per page
             self.per_page_frame = ctk.CTkFrame(self, fg_color='transparent')
@@ -305,7 +303,7 @@ class QuizFrame(ctk.CTkFrame):
             self.p_count_label.pack(side='left', expand=True, fill='x', padx=10, pady=3)
             self.p_count_amnt = ctk.CTkTextbox(self.per_page_frame, font=(FONT, NORMAL_FONT_SIZE), height=20)
             self.p_count_amnt.insert(tk.END, self.per_page_amount.get())
-            self.p_count_slider = ctk.CTkSlider(self.per_page_frame, from_=1, to=self.question_count.get() if self.question_count.get() < 50 else 50, variable=self.per_page, command=lambda x:self.get_new_amount(self.p_count_amnt, self.per_page, self.per_page_amount))
+            self.p_count_slider = ctk.CTkSlider(self.per_page_frame, from_=1 if self.question_count.get() != 1 else 0, to=self.question_count.get() if self.question_count.get() < 50 else 50, variable=self.per_page, command=lambda x:self.get_new_amount(self.p_count_amnt, self.per_page, self.per_page_amount))
             self.p_count_slider.pack(side='left', expand=True, fill='x', padx=10, pady=3)
             self.p_count_amnt.pack(side='left', expand=True, fill='x', padx=10, pady=3)
             self.p_count_amnt.bind("<KeyRelease>", lambda x:self.attempt_pushing_textbox_amount(self.p_count_amnt, self.per_page, self.per_page_amount, 1))
@@ -333,6 +331,18 @@ class QuizFrame(ctk.CTkFrame):
             self.timer_frame_amnt.bind("<KeyRelease>", lambda x:self.attempt_pushing_textbox_amount(self.timer_frame_amnt, self.timer, self.timer_amount, 3))
             self.timer_frame.pack(padx=10, pady=3)
             
+            # toggle of if we add intead of replacing ai question
+            self.add_ai_questions = ctk.CTkFrame(self, fg_color='transparent')
+            self.add_ai_questions.columnconfigure((0, 1), weight=1, uniform='a')
+            self.add_ai_questions.rowconfigure(0, weight=1)
+            self.add_ai_questions_label = ctk.CTkLabel(self.add_ai_questions, text="Add AI questions on top of normal sample?: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+            self.add_ai_questions_label.grid(row=0, column=0)
+            self.add_ai = tk.IntVar()
+            self.add_ai.set(0)
+            self.add_ai_questions_toggle = ctk.CTkSwitch(self.add_ai_questions, text="", variable=self.add_ai, onvalue=1, offvalue=0)
+            self.add_ai_questions_toggle.grid(row=0, column=1)
+            self.add_ai_questions.pack(fill='x')
+            
             # buttons for ai test formats
             self.explaination = ctk.CTkLabel(self, text='Pick a format to generate a test with these settings:', font=(FONT, NORMAL_FONT_SIZE))
             self.explaination.pack(pady=2.5)
@@ -352,13 +362,23 @@ class QuizFrame(ctk.CTkFrame):
             self.question_count.trace_add('write', self.update_sliders)
             self.update_sliders()
         else:
-            # only draw label stating we need 3 questions
-            self.quiz_maker_label = ctk.CTkLabel(self, text="Create at least 3 questions to start a quiz!", fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'))
+            # only draw label stating we need a question
+            self.quiz_maker_label = ctk.CTkLabel(self, text="Create a question to start a quiz!", fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'))
             self.quiz_maker_label.pack(padx=10, pady=10, anchor='w')
         
     def get_new_amount(self, textbox, num_var, str_var):
+        # lock the slider if we have 1 question
+        if self.question_count.get() < 1:
+            self.question_count.set(1)
+            self.question_count_amount.set(str(1))
+            self.attempt_pushing_textbox_amount(self.q_count_amnt, self.question_count, self.question_count_amount, 0)
+        if self.per_page.get() < 1:
+            self.per_page.set(1)
+            self.per_page_amount.set(str(1))
+            self.attempt_pushing_textbox_amount(self.p_count_amnt, self.per_page, self.per_page_amount, 1)
+            
         # write the amount to the string var holding the question count selected
-        str_var.set(str(num_var.get()))
+        str_var.set(str(round(num_var.get(), 1)))
         
         # reflect in textbox
         textbox.delete(1.0, tk.END)
@@ -391,24 +411,23 @@ class QuizFrame(ctk.CTkFrame):
     
     def update_sliders(self, *args):
         # update the to/from of the sliders where needed
-        if self.parent.q_count.get() != 3:
-            self.q_count_slider.configure(to=self.parent.q_count.get())
+        self.p_count_slider.configure(from_=1 if self.parent.q_count.get() != 1 else 0)
+        self.q_count_slider.configure(to=self.parent.q_count.get())
+        self.p_count_slider.configure(from_=1 if self.question_count.get() != 1 else 0)
         self.p_count_slider.configure(to=self.question_count.get() if self.question_count.get() < 50 else 50)
         
         # set the amount in question count to its maximum is it is exceeded
-        if self.parent.q_count.get() != 3:
-            if self.question_count.get() > self.parent.q_count.get():
-                self.question_count.set(self.parent.q_count.get())
-                self.question_count_amount.set(str(self.parent.q_count.get()))
-                self.attempt_pushing_textbox_amount(self.q_count_amnt, self.question_count, self.question_count_amount, 0)
+        if self.question_count.get() > self.parent.q_count.get():
+            self.question_count.set(self.parent.q_count.get())
+            self.question_count_amount.set(str(self.parent.q_count.get()))
+            self.attempt_pushing_textbox_amount(self.q_count_amnt, self.question_count, self.question_count_amount, 0)
         if self.per_page.get() > self.question_count.get():
             self.per_page.set(self.question_count.get() if self.question_count.get() < 50 else 50)
             self.per_page_amount.set(str(self.per_page.get()))
             self.attempt_pushing_textbox_amount(self.p_count_amnt, self.per_page, self.per_page_amount, 1)
             
         # lastly update the slider positions
-        if self.parent.q_count.get() != 3:
-            self.q_count_slider.set(self.question_count.get())
+        self.q_count_slider.set(self.question_count.get())
         self.p_count_slider.set(self.per_page.get())
         
 class BuilderFrame(ctk.CTkFrame):
@@ -428,13 +447,16 @@ class BuilderFrame(ctk.CTkFrame):
         self.refresh_explaination_flag = False
         self.is_modified = False
         
-        self.question_label = ctk.CTkLabel(self, text="Question #", fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'), textvariable=self.question_index)
-        self.question_label.pack(padx=10, pady=10, anchor='w')
-        
+        self.question_header = ctk.CTkFrame(self, fg_color='transparent', corner_radius=25)
+        self.question_header.rowconfigure(1, weight=1)
+        self.question_header.columnconfigure((0,1), weight=1, uniform='a')
+        self.question_label = ctk.CTkLabel(self.question_header, text="Question #", fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'), textvariable=self.question_index)
+        self.question_label.grid(row=0, column=0, sticky='w')
         self.question_type_index = tk.StringVar()
         self.question_type_index.set("MC")
-        self.question_type_dropdown = ctk.CTkComboBox(self, font=(FONT, NORMAL_FONT_SIZE), values=["MC", "TD", "Ess"], command=self.change_question_type, variable=self.question_type_index)
-        self.question_type_dropdown.pack(padx=10, pady=10, anchor='e')
+        self.question_type_dropdown = ctk.CTkComboBox(self.question_header, font=(FONT, NORMAL_FONT_SIZE), values=["MC", "TD", "Ess"], command=self.change_question_type, variable=self.question_type_index)
+        self.question_type_dropdown.grid(row=0, column=1, sticky='e')
+        self.question_header.pack(fill='x', expand=True, pady=10, padx=10)
         
         # create the frame that will contain the question entry information
         self.question_frame = ctk.CTkFrame(self, fg_color='transparent')
@@ -554,6 +576,7 @@ class BuilderFrame(ctk.CTkFrame):
         
         # collate the contents of the question fields into a dictionary of strings based on the fields read, each string will be prefixed with its key
         # additionally, what we collate into what key depends on the question type!
+        answer_set = []
         submit_list['Type'] = self.question_type_index.get()
         submit_list['Q'] = str(self.q_index)
         match submit_list['Type']:
@@ -563,8 +586,10 @@ class BuilderFrame(ctk.CTkFrame):
                         submit_list["Question"] = field_var.get()
                     elif i <= self.question.correct_answers:
                         submit_list["C" + str(i)] = field_var.get()
+                        answer_set += [field_var.get()]
                     else:
                         submit_list["A" + str(i - self.question.correct_answers)] = field_var.get()
+                        answer_set += [field_var.get()]
                 submit_list['Forced'] = str(self.question.forced.get())
                 submit_list['Explaination'] = self.question.explaination
             case "TD": # collect all correct and incorrect answers inputted, gained from the question's provided opened fields
@@ -573,6 +598,8 @@ class BuilderFrame(ctk.CTkFrame):
                         submit_list["Question"] = field_var.get()
                     elif i <= self.question.matchings:
                         submit_list["T" + str(i)], submit_list["D" + str(i)] = (field_var[0].get(),field_var[1].get())
+                        answer_set += [field_var[0].get()]
+                        answer_set += [field_var[1].get()]
                 submit_list['Forced'] = str(self.question.forced.get())
                 submit_list['Explaination'] = self.question.explaination
             case "Ess": # collect all correct and incorrect answers inputted, gained from the question's provided opened fields
@@ -583,15 +610,21 @@ class BuilderFrame(ctk.CTkFrame):
                     submit_list["Language"] = self.question.code_lang_entry.get('1.0', 'end-1c')
                 else:
                     submit_list["Language"] = "N/A"
-                submit_list['Explaination'] = "Explainations for essay question to be generated at grade time, so none will be provided :)"
+                submit_list['Explaination'] = "Essay questions cannot be graded in offline mode, but I'm sure you got it right :)"
         
         print(submit_list)
+        
+        # fail immediately if any answers match each other to prevent ambiguity in logic and for the student!
+        if len(answer_set) != len(set(answer_set)):
+            messagebox.showwarning("Error!", "You have duplicate answer choices specified, please edit them to make them unique from each other!")
+                    
+            return
         
         # now, generate or fail for all missing fields based on the question's type
         match submit_list['Type']:
             case "MC":  
                 # check if we have at least one correct answer and one incorrect answer if we are offline
-                if self.settings['Offline'] and (not "C1" in submit_list or not "A1" in submit_list):
+                if self.settings['Offline'] and (not "C1" in submit_list or not "A1" in submit_list or not submit_list["C1"] or not submit_list["A1"]):
                     messagebox.showwarning("Offline!", "Since you are in offline mode you must provide at least one correct and incorrect answer to the question before you can submit it to your deck!")
                     
                     return
@@ -613,7 +646,7 @@ class BuilderFrame(ctk.CTkFrame):
             
             case "TD":  
                 # check if we have at least one matching if we are offline
-                if self.settings['Offline'] and (not "T1" in submit_list or not "D1" in submit_list):
+                if self.settings['Offline'] and (not "T1" in submit_list or not "D1" in submit_list or not submit_list['T1'] or not submit_list['D1']):
                     messagebox.showwarning("Offline!", "Since you are in offline mode you must provide at least one matching to the question before you can submit it to your deck!")
                     
                     return
@@ -634,7 +667,7 @@ class BuilderFrame(ctk.CTkFrame):
                         generate_explaination_for_question(submit_list, self.parent.domain, self.parent.context, self.settings["API Key"], self.settings["Model"])
             case "Ess":  
                 # check if we have guidelines specified if we are offline
-                if self.settings['Offline'] and "Guidelines" == "":
+                if self.settings['Offline'] and not submit_list["Guidelines"]:
                     messagebox.showwarning("Offline!", "Since you are in offline mode you must provide the guidelines before submitting this question to your deck!")
                     
                     return
@@ -703,7 +736,7 @@ class QuestionFrame(ctk.CTkFrame):
         # dyn index
         self.trunc_amt = 10
         self.title = tk.StringVar()
-        self.title.set("Q. " + self.content['Q'] + ": " + self.content["Question"][:int(self.trunc_amt)].replace('\n', ' ') + ("..." if len(self.content["Question"]) > self.trunc_amt else ""))
+        self.title.set("Q. " + str(self.content['Q']) + ": " + self.content["Question"][:int(self.trunc_amt)].replace('\n', ' ') + ("..." if len(self.content["Question"]) > self.trunc_amt else ""))
         
         # configure frame
         self.columnconfigure(0, weight=8, uniform='a')

@@ -1,4 +1,3 @@
-import os
 import json
 import fitz, docx2txt
 from pptx import Presentation
@@ -18,22 +17,7 @@ MAX_THREADS = 12
 THREAD_SIZE = 1
 
 def determine_model_str_from_index(model):
-    print("Making a GPT model call with " + "gpt-4o-mini" if model == 0 else ("gpt-4o" if model == 1 else "o1-mini"))
     return "gpt-4o-mini" if model == 0 else ("gpt-4o" if model == 1 else "o1-mini")
-
-def get_driver_function():
-    print('''Select a driver function: 
-          \t1. Test API Key
-          \t2. Display question bank contents
-          \t3. Load questions from a Quizzy file
-          \t4. Write questions to a Quizzy file
-          \t5. Write a new question and auto-complete for missing content
-          \t6. Generate new question(s) based off written question w/ permutation
-          \t7. Generate new question(s) off question bank sample
-          \t8. Attempt and grade specific question from question bank
-          \t9. Generate and attempt quiz from question bank
-          \t10. Exit''')
-    return int(input("?: "))
 
 def is_number(s):
     try:
@@ -312,36 +296,6 @@ def validate_question_object(object):
     # if we make it here, then this question must be valid!
     return True                
 
-def prompt_for_answer_for_question(question, is_frq, Q_index = -1):
-    # create a list to capture the answer(s)
-    answer_choices = []
-    
-    # switch on question type
-    match question['Type']:
-        case "MC":
-            # get the number of expected correct answers
-            expected_answer_count = sum(1 for key in question if key.startswith("C"))
-            
-            # print the question out
-            print(f"{"" if Q_index == -1 else str(Q_index) + ". "}{question["Question"]}")
-            
-            # if this is an FRQ question, prompt immediately
-            if is_frq:
-                answer_count = 0
-                
-                # continue to prompt until we meet the expected answer count
-                while answer_count < expected_answer_count:
-                    input_ans = input(f"{answer_count}?: ")
-                    answer_choices.append(input_ans)
-                    answer_count += 1
-            else:
-                # print the answer choices out in a randomized order
-                correct_answers = [c_ans for c_key, c_ans in question.items() if c_key.startswith("C")]
-                random.shuffle(correct_answers)
-                
-                for i in range(len(correct_answers)):
-                    pass # START HERE
-
 def construct_question_object(type, question = None, q_index = None, correct_answers = None, incorrect_answers = None, terms = None, guidelines = None, format = None, language = None, forced = None, explaination = None):
     # create an empty dictionary to represent this question
     built_question = {}
@@ -394,96 +348,6 @@ def construct_question_object(type, question = None, q_index = None, correct_ans
         
     # return the built question object
     return built_question
-            
-def get_question_from_user_input(index, force_valid_input = False):
-    # ask initally for the type of question and question itself
-    while True:
-        type = input("Enter the question type: (Multiple Choice, Term-Definition, Essay) ")
-        if type == "Multiple Choice" or type == "Term-Definition" or type == "Essay":
-            break
-    
-    while True and type != "Essay":
-        print('''Select one of the following:
-            \t1. The question can have FRQ responses
-            \t2. The question NEVER has FRQ responses
-            \t3. The question ALWAYS has FRQ responses''')
-        replaced = int(input("?: ")) - 1
-        if replaced < 3 and replaced > -1:
-            break
-
-    question = input("Enter the question, you may specify imbeds using ``` notation: ")
-    
-    match type:
-        case "Multiple Choice":
-            # iterate asking for correct answer choices until the user enters STOP
-            correct_answers = []
-            correct_count = 0
-            while True:
-                buffer = input("Enter a correct answer choice: (or STOP to move on) ")
-                if buffer == "STOP" and (not force_valid_input or correct_count < 1):
-                    break
-                correct_count += 1
-                correct_answers.append(buffer)
-                
-            # iterate asking for incorrect answer choices until the user enters STOP
-            incorrect_answers = []
-            incorrect_count = 0
-            while True:
-                buffer = input("Enter an incorrect answer choice: (or STOP to move on) ")
-                if buffer == "STOP" and (not force_valid_input or incorrect_count < 1):
-                    break
-                incorrect_count += 1
-                incorrect_answers.append(buffer)
-                
-            # generate and return the built question
-            return construct_question_object(type, question, index, correct_answers=correct_answers, incorrect_answers=incorrect_answers, forced=replaced)
-        
-        case "Term-Definition":
-            # iterate asking for term definition pairs
-            pairs = []
-            pair_count = 0
-            while True:
-                term = input("Enter a term: (or SKIP to skip this field) ")
-                if (term != "SKIP" and term != "") and not force_valid_input:
-                    definition = input("Enter that term's definition: (or SKIP to skip this field) ")
-                    if not force_valid_input:
-                        pairs.append((term, definition if definition != "SKIP" and definition != "" else ""))
-                        pair_count += 1
-                elif not force_valid_input:
-                    definition = input("Enter a definition for whom we are missing the term: (or SKIP to move on) ")
-                    if definition == "SKIP" or definition == "":
-                        break
-                    pairs.append(("", definition))
-                elif force_valid_input and pair_count > 0:
-                    if input("Please enter CONTINUE if you wish to move on: ") == "CONTINUE":
-                        break
-                    
-            # generate and return the built question
-            return construct_question_object(type, question, index, terms=pairs, forced=replaced)
-        case "Essay":
-            # get the guidelines for the question
-            guidelines = input("Enter the grading guidelines for this question: ")
-            
-            # select the formatting criterion for which the question is graded
-            while True:
-                print('''Select one of the following:
-                    \t1. The student's response is to be graded as if it was an explaination
-                    \t2. The student's response is to be graded as if it were code
-                    \t3. The student's response is to be graded as if it were a formal proof''')
-                format = int(input("?: ")) - 1
-                if format < 3 and format > -1:
-                    break
-                
-            # ask for the language that the expected code is to be written in
-            language = input("Enter the language you expect the student's response to be written in: ") if format == 1 else ""
-            if language == "":
-                language = "Any language"
-            
-            # generate and return the built question
-            return construct_question_object(type, question, index, guidelines=guidelines, format=format, language=language, forced="1")
-        case _:
-            print("Failed to build question due to illegal input!")
-            return None
 
 def get_random_context_segment(context, cutoff):
     # split the context segment into words and randomly choose a segment of those words based on the cuttoff
@@ -534,98 +398,81 @@ def get_image_embed_links_if_any(question):
     # return blank if no link is found
     return ""
 
-def grade_quiz_in_parallel(quiz_set, answer_set, frq_set, domain, context, api_key, model):
-    # get the number of questions in the quiz set that need to be graded
-    question_count = len(quiz_set)
-    grade_list = [None] * question_count
-    Q_index = 0
-    
-    # create as many threads as needed to process the count, using constants on max threads and batch size to determine our thread distribution
-    threads = []
-    while question_count > 0:
-        # get a quota for this iteration
-        quota = MAX_THREADS if question_count >= MAX_THREADS else question_count
-        for i in range(quota):
-            # grade the question on its own thread
-            threads.append(threading.Thread(target=grade_question, args=(quiz_set[Q_index], Q_index, answer_set[Q_index], frq_set[Q_index], domain, context, api_key, model, grade_list)))
-            threads[i].start()
-            Q_index += 1
-        for i in range(quota):
-            threads[i].join()
-        threads.clear()
-        question_count -= quota
+def grade_multiple_choice_question(question, answers, frqComp):
+    # collect the correct answers of the question
+    correct_answers = []
+    for key, val in question.items():
+        if key.startswith("C"):
+            correct_answers += [val]
+            
+    # determine if we are doing numaric comparision grading
+    is_numaric = all([is_number(ans) for ans in correct_answers])
+                
+    # determine if this question is prosed as a FRQ
+    if frqComp:
+        max_weighted_score = len(correct_answers)
+        score = 0
         
-    # get the overall grade
-    grade = sum(grade_list) / (len(quiz_set) * 10) * 100
-    
-    # return the overall grade
-    return grade
+        # compare each answer choice against all possible correct answers and take the one with the best score (answers are written and thus may partially match)
+        if is_numaric:
+            # get the best matching answer-score pair
+            results = all_at_once_numaric_comparision_grading(answers, correct_answers)
+            
+            # add the results sum to the total score
+            score += sum(results)
+        else:
+            # get the best matching answer-score pair
+            results = all_at_once_answer_comparision_grading(answers, correct_answers)
+            
+            # add the results sum to the total score
+            score += sum(results)
+            
+        # scale the score out of 1
+        score = score / max_weighted_score
+    else:
+        # answers must absolutely match, so we can simply just do a symmetric difference of the 2 sets
+        missing_matches = [x for x in list(set(answers).symmetric_difference(set(correct_answers))) if x != "NanX"]
+        print(answers)
+        print(correct_answers)
+        print(missing_matches)
+        
+        # the score is the inverse of the ratio of missing matches over total correct answers
+        score = 1 - (min(len(missing_matches), len(correct_answers)) / len(correct_answers))
+        
+    return int(score * 10)
 
-def grade_question(question, Q_index, answers, frqComp, domain, context, api_key, model, t_results = None):
+def grade_matching_question(question, answers, frqComp):
+    # collect the terms in the order that they appear from the question
+    matchings = sum(1 for key in question if key.startswith("D"))
+    terms = []
+    for i in range(matchings):
+        terms += [question["T" + str(i + 1)]]
+        
+    # determine if this question is prosed as a FRQ
+    max_weighted_score = len(terms)
+    score = 0
+    if frqComp:
+        # iterate over the answers and compare them to their respective term, where score can be partial if the provided answer is close
+        score = sum([answer_comparision_grading(ans, term) for ans, term in zip(answers, terms)]) / max_weighted_score
+    else:
+        # iterate over the answers and just check if they are equal, no partial credit
+        score = sum([1 if ans == term else 0 for ans, term in zip(answers, terms)]) / max_weighted_score
+        
+    return int(score * 10)
+
+def grade_question(question, Q_index, answers, frqComp, domain, context, api_key, model):
     # grade this question differently depending on its type
     match question['Type']:
         case "MC":
-            # collect the correct answers of the question
-            correct_answers = []
-            for key, val in question.items():
-                if key.startswith("C"):
-                    correct_answers += val
-                    
-            # determine if we are doing numaric comparision grading
-            is_numaric = all([is_number(ans) for ans in correct_answers])
-                        
-            # determine if this question is prosed as a FRQ
-            if frqComp:
-                max_weighted_score = len(correct_answers)
-                score = 0
-                
-                # compare each answer choice against all possible correct answers and take the one with the best score (answers are written and thus may partially match)
-                if is_numaric:
-                    # get the best matching answer-score pair
-                    results = all_at_once_numaric_comparision_grading(answers, correct_answers)
-                    
-                    # add the results sum to the total score
-                    score += sum(results)
-                else:
-                    # get the best matching answer-score pair
-                    results = all_at_once_answer_comparision_grading(answers, correct_answers)
-                    
-                    # add the results sum to the total score
-                    score += sum(results)
-                    
-                # scale the score out of 1
-                score = score / max_weighted_score
-            else:
-                # answers must absolutely match, so we can simply just do a quick union of the 2 sets
-                missing_matches = list(set(answers).union(set(correct_answers)))
-                
-                # the score is the inverse of the ratio of missing matches over total correct answers
-                score = 1 - (len(missing_matches) / len(correct_answers))
+           score = grade_multiple_choice_question(question, answers, frqComp)
         case "TD":
-            # collect the terms in the order that they appear from the question
-            matchings = sum(1 for key in question if key.startswith("D"))
-            terms = []
-            for i in range(matchings):
-                terms += [question["T" + str(i + 1)]]
-                
-            # determine if this question is prosed as a FRQ
-            max_weighted_score = len(terms)
-            score = 0
-            if frqComp:
-                # iterate over the answers and compare them to their respective term, where score can be partial if the provided answer is close
-                score = sum([answer_comparision_grading(ans, term) for ans, term in zip(answers, terms)]) / max_weighted_score
-            else:
-                # iterate over the answers and just check if they are equal, no partial credit
-                score = sum([1 if ans == term else 0 for ans, term in zip(answers, terms)]) / max_weighted_score
+            score = grade_matching_question(question, answers, frqComp)
         case "Ess":
             # score is completely determined by prompt through assessing the answer that the user typed in and how it adheres to the question guidelines
             score = grade_essay_question(question, answers[0], domain, context, api_key, model)
             
-    # scale the score to 10 points and push the grade to threads if applicable
-    if t_results:
-        t_results[Q_index] = int(score * 10)
-    else:
-        return int(score * 10)
+    # scale the score to 10 points and return the result
+    return int(score * 10)
             
 def grade_essay_question(question, answer, domain, context, api_key, model):
     # First retrieve an image embed if it exists
@@ -674,7 +521,7 @@ def grade_essay_question(question, answer, domain, context, api_key, model):
     question["Explaination"] = explaination
     
     # return the score
-    return grade / 10
+    return int(grade)
 
 def generate_permutation_from_question(question, domain, context, api_key, model, t_results = None):
     # create a new question object
@@ -1254,7 +1101,7 @@ def get_question_sample(bank):
     # choose the appropriate number of questions to create the sample
     match sel_type:
         case "MC":
-            sample = random.sample(mc_questions, 3)
+            sample = random.sample(mc_questions, min(3, len(mc_questions)))
         case "TD":
             sample = random.sample(td_questions, 1)
         case "Ess":
@@ -1290,7 +1137,6 @@ def batch_generate_questions(bank, count, domain, context, api_key, model):
         
     # once all of the questions are generated, go back and update the q_indicies of every question
     q_count = len(bank)
-    print(ai_generated_questions)
     for question in ai_generated_questions:
         q_count += 1
         question["Q"] = str(q_count)
@@ -1367,9 +1213,10 @@ def generate_questions(sample, count, domain, context, api_key, model, t_results
     
     # if the sample was TD, we need to count how many terms/definitions we got
     num_of_terms = 0
-    for line in result:
-        if line.strip().startswith("T"):
-            num_of_terms = max(num_of_terms, int(line.split("~")[0][1:]))
+    if sample[0]['Type'] == 'TD':
+        for line in result:
+            if line.strip().startswith("T"):
+                num_of_terms = max(num_of_terms, int(line.split("~")[0][1:]))
             
     # write key dictionary for setting keys
     setting_keys = {"Question": "", "Explaination": ""}
@@ -1377,7 +1224,7 @@ def generate_questions(sample, count, domain, context, api_key, model, t_results
     # if sample is Ess, add base keys for guidelines, format, and language
     if sample[0]['Type'] == 'Ess':
         setting_keys['Guidelines'] = ""
-        setting_keys['Format'] = ""
+        setting_keys['Format'] = sample[0]['Format']
         setting_keys['Language'] = ""
     
     # use lists to keep track of items that we have multiplies of
@@ -1413,8 +1260,6 @@ def generate_questions(sample, count, domain, context, api_key, model, t_results
             setting_keys['Question'] += item + " "
         elif key.startswith("G"):
             setting_keys['Guidelines'] += item + " "
-        elif key.startswith("F"):
-            setting_keys['Format'] += item + " "
         elif key.startswith("L"):
             setting_keys['Language'] += item + " "
         elif key.startswith("E"):
@@ -1444,6 +1289,7 @@ def generate_questions(sample, count, domain, context, api_key, model, t_results
             t_results += [construct_question_object("Term-Definition", setting_keys["Question"], "-1", forced="0", terms=terms, explaination=setting_keys["Explaination"])]
         case "Ess":
             t_results += [construct_question_object("Essay", setting_keys["Question"], "-1", forced="0", guidelines=setting_keys["Guidelines"], format=setting_keys["Format"], language=setting_keys["Language"], explaination=setting_keys["Explaination"])]
+    t_results[-1]["AI Generated"] = "True"
             
     return
 
@@ -1892,122 +1738,3 @@ def get_text_context_from_file(files):
                 text_content += open(file_path, "r").read()
             
     return text_content
-
-if __name__ == "__main__":
-    driver_loop = True
-    
-    domain = input("Enter the domain segment: ")
-    print("Requesting file that contains context...")
-    context = ""
-    try:
-        while True:
-            context_file = filedialog.askopenfilenames(defaultextension='*.txt *.docx *.pdf *.pptx', filetypes=[("ALL Supported Types", "*.txt *.docx *.pdf *.pptx"), ("Text", "*.txt"), ("Word Document", "*.docx"), ("PDF Document", "*.pdf"), ("Powerpoint Presentation", "*.pptx")])
-            context += get_text_context_from_file(context_file.split(".")[-1], context_file)
-            print("Successfully read from context file")
-            repeat = input("Would you like to open another file? (Y)es/(N)o ?: ")
-            if not repeat.lower().startswith('y'):
-                break
-    except Exception as e:
-        if context == "":
-            context = "No context provided"
-        print("Failed to read context file: " + str(e))
-    model = "3.5"
-    online = True
-    
-    # Get API key from app
-    try:
-        # get the file path
-        user_path = os.path.expanduser("~")
-        directory = os.path.join(user_path, "IXSettings", "Quizzy", "quizzy.json")
-        
-        # open the settings file
-        with open(directory, 'r') as file:
-            json_settings = file.read()
-            
-        # convert JSON to dictionary
-        py_obj = json.loads(json_settings)
-        settings = dict(py_obj)
-        success = True
-    except Exception as e:
-        # report, but we'd only get an exception if the settings file didnt exist or was tampered so we just wont fill the datems
-        success = False
-        
-    if success:
-        try:
-            # write from dictionary to fields
-            api_key = settings['API Key']
-            print("Successfully grabbed API key")
-        except Exception as e:
-            # write from dictionary to fields
-            api_key = "NaN"
-            print("Failed to get API key, make sure its properly seeded in the Quizzy client!")
-    
-    print("\n=====================================================\n")
-    question_index = 1
-    question_bank = []
-    while driver_loop:
-        match get_driver_function():
-            case 1:
-                print("API key is valid!" if test_api_key(api_key) else "API key is INVALID!")
-            case 2:
-                print(question_bank)
-            case 3:
-                results = import_from_quizzy_file()
-                if results[2] is not []:
-                    domain = results[0]
-                    context = results[1]
-                    question_bank = results[2]
-                    question_index = len(question_bank) + 1
-            case 4:
-                export_to_quizzy_file(domain, context, question_bank)
-            case 5:
-                question = get_question_from_user_input(question_index)
-                match question['Type']:
-                    case 'MC':
-                        fill_multiple_choice_options(question, domain, context, api_key, model)
-                    case 'TD':
-                        unscramb_input = input("Is this the correct matching of terms and definitions? (Y)es/(N)o: ")
-                        unscramble = not unscramb_input.lower().startswith("y")
-                        fill_matching_options(question, unscramble, domain, context, api_key, model)
-                    case 'Ess':
-                        fill_essay_guidelines(question, domain, context, api_key, model)
-
-                generate_explaination_for_question(question, domain, context, api_key, model)
-
-                print(question)
-
-                question_bank += [question]
-
-                question_index += 1
-                
-            case 6:
-                question = get_question_from_user_input(0)
-                n = int(input("How many questions do you wish to generate? "))
-                threads = []
-                results = []
-                while n > 0:
-                    for i in range(MAX_THREADS if n // MAX_THREADS > 0 else n):
-                        threads.append(threading.Thread(target=generate_permutation_from_question, args=(question, domain, context, api_key, model, results)))
-                        threads[i].start()
-                    for i in range(MAX_THREADS if n // MAX_THREADS > 0 else n):
-                        threads[i].join()
-                    for i in range(MAX_THREADS if n // MAX_THREADS > 0 else n):
-                        print(results[i])
-                    threads.clear()
-                    results.clear()
-                    n -= MAX_THREADS
-            case 7:
-                n = int(input("How many questions do you wish to generate? "))
-                question_bank += batch_generate_questions(question_bank, n, domain, context, api_key, model)
-                question_index = len(question_bank) + 1
-            case 8:
-                n = int(input("Which question from the bank do you want to answer? "))
-                is_frq = input("Would you like to open another file? (Y)es/(N)o ?: ").lower().startswith("y")
-                question_to_answer = question_bank[n]
-                answer = prompt_for_answer_for_question(question_to_answer, is_frq)
-                print(question)
-                print(grade_question(question_to_answer, -1, answer, is_frq, domain, context, api_key, model))
-            case 9:
-                print("Not implemented!")
-            case 10:
-                driver_loop = False

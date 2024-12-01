@@ -59,17 +59,17 @@ class Quizzy(ctk.CTk):
         self.current_frame.destroy()
         self.current_frame = MainMenu(self, lambda x,y,z,w:self.get_builder(x, y, z, w))
         
-    def get_quiz(self, data, content, counts, settings):
+    def get_quiz(self, data, content, quiz_properties, settings):
         # change the title dynamically
         self.title('Quizzy - Taking Quiz on ' + data[0])
         
         # disable close button
-        self.protocol("WM_DELETE_WINDOW", lambda: None)
+        #self.protocol("WM_DELETE_WINDOW", lambda: None)
         
         # clear out the old frame, get the quiz frame
         self.current_frame.pack_forget()
         self.current_frame.destroy()
-        self.current_frame = Quiz(self, data, content, counts[0], counts[2], counts[1], counts[3], counts[5], lambda x,y,z,w:self.get_builder(x, y, z, w), counts[4], settings)
+        self.current_frame = Quiz(self, data, content, quiz_properties["question_count"], quiz_properties["ai_settings"], quiz_properties["frq_prop"], quiz_properties["questions_per_page"], quiz_properties["time_limit"], lambda x,y,z,w:self.get_builder(x, y, z, w), quiz_properties["was_modified"], settings, quiz_properties["ai_questions_are_added"])
         
 class MainMenu(ctk.CTkFrame):
     def __init__(self, parent, get_builder):
