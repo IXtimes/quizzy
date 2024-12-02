@@ -11,10 +11,56 @@ from keys import CONTEXT_CRYPTO_KEY
 from tkinter import messagebox
 import random
 import threading
+import time
 
 CONTEXT_CUTOFF = 750
+THREAD_TIMEOUT_TIME = 10
 MAX_THREADS = 12
 THREAD_SIZE = 1
+
+def call_gpt(domain, context, api_key, model, system, request, image_embed):
+    return_response = []
+    
+    # create a background function to make the api call
+    def internal_gpt_call():
+        # initalize client and domain/context segments
+        client = OpenAI(api_key=api_key)
+        domain_c = "Domain: " + domain + "\n"
+        context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
+        model_c = determine_model_str_from_index(model)
+        
+        try:
+            response = client.chat.completions.create (
+            model = model_c,
+            messages = [
+                    {"role": "system", "content": system},
+                    {
+                        "role":"user",
+                        "content": [
+                            {"type": "text", "text": domain_c + context_c + request},
+                            {"type": "image_url", "image_url": {
+                                "url": image_embed
+                            }} 
+                        ] if image_embed != "" else [
+                            {"type": "text", "text": domain_c + context_c + request}
+                        ]
+                    }
+                ]
+            )
+            return_response.append(response.choices[0].message.content)
+        except Exception as e:
+            return_response.append(f"Error: {str(e)}")
+        
+    # push the response to a thread and wait for it using a timeout length
+    thread = threading.Thread(target=internal_gpt_call)
+    thread.start()
+    thread.join(THREAD_TIMEOUT_TIME)
+    
+    # check if the thread timed out
+    if thread.is_alive():
+        raise TimeoutError("GPT call timed out!")
+
+    return return_response[0]
 
 def determine_model_str_from_index(model):
     return "gpt-4o-mini" if model == 0 else ("gpt-4o" if model == 1 else "o1-mini")
@@ -185,6 +231,11 @@ def validate_question_object(object):
                     messagebox.showerror(f"Failure @{q_index}", "Incorrect answers are incorrectly indexed, unable to import!")
                     return False
                 
+                # check for a forced state, default to "Either" (0)
+                if not "Forced" in object:
+                    print(f'@WARN ({q_index}): Question lacking "Forced" flag, defaulting to Either (0)!')
+                    object["Forced"] = "0"
+                
                 # check for illegal keys
                 for key, ___ in object.items():
                     if key == "Type":
@@ -238,6 +289,11 @@ def validate_question_object(object):
                     messagebox.showerror(f"Failure @{q_index}", "Definitions are incorrectly indexed, unable to import!")
                     return False
                 
+                # check for a forced state, default to "Either" (0)
+                if not "Forced" in object:
+                    print(f'@WARN ({q_index}): Question lacking "Forced" flag, defaulting to Either (0)!')
+                    object["Forced"] = "0"
+                
                 # check for illegal keys
                 for key, ___ in object.items():
                     if key == "Type":
@@ -257,6 +313,11 @@ def validate_question_object(object):
                 if not "Format" in object:
                     print(f'@WARN ({q_index}): Essay question missing format, defaulting to Explaination (0)!')
                     object["Format"] = "0"
+                    
+                # check for difficulty specification, and default to "1" if missing
+                if not "Difficulty" in object:
+                    print(f'@WARN ({q_index}): Essay question missing difficulty, defaulting to Know (1)!')
+                    object["Difficulty"] = "1"
                 
                 # fail if format is "Code" and the language is not specified
                 if not "Language" in object or (object["Format"] == "1" and object["Language"] == "N/A"):
@@ -268,7 +329,7 @@ def validate_question_object(object):
                 for key, ___ in object.items():
                     if key == "Type":
                         continue
-                    if key.startswith(("T", "D", "A", "C")):
+                    if key.startswith(("T", "D", "A", "C")) and key != "Difficulty":
                         print(f'@FAIL ({q_index}): Essay question contains illegal key: "{key}" Terminating...')
                         messagebox.showerror(f"Failure @{q_index}", f"Essay question contains illegal key {key}, unable to import!")
                         return False
@@ -282,11 +343,6 @@ def validate_question_object(object):
         print(f'@FAIL ({q_index}): Question failed validation due to exception: "{e}". Terminating...')
         messagebox.showerror(f"Failure @{q_index}", f"Importing this question generated the following exception: {e}, unable to import!")
         return False
-    
-    # check for a forced state, default to "Either" (0)
-    if not "Forced" in object:
-        print(f'@WARN ({q_index}): Question lacking "Forced" flag, defaulting to Either (0)!')
-        object["Forced"] = "0"
         
     # check for an explaination, default to "No explaination was provided :("
     if not "Explaination" in object:
@@ -295,59 +351,6 @@ def validate_question_object(object):
         
     # if we make it here, then this question must be valid!
     return True                
-
-def construct_question_object(type, question = None, q_index = None, correct_answers = None, incorrect_answers = None, terms = None, guidelines = None, format = None, language = None, forced = None, explaination = None):
-    # create an empty dictionary to represent this question
-    built_question = {}
-    
-    # ensure we have a question text and q_index, otherwise fail immediately
-    if question is None or q_index is None:
-        print("Failed to build question due to illegal input!")
-        return None
-    
-    # pass q_index and question to field
-    built_question['Q'] = q_index
-    built_question['Question'] = question
-    
-    # switch on the question type
-    match type:
-        case "Multiple Choice":
-            built_question['Type'] = "MC"
-            
-            # iterate and add the correct answers and incorrect answers
-            for i, content in enumerate(correct_answers, 1):
-                built_question["C" + str(i)] = content
-            for i, content in enumerate(incorrect_answers, 1):
-                built_question["A" + str(i)] = content
-        case "Term-Definition":
-            built_question['Type'] = "TD"
-            
-            # iterate over term definition pairs and add them to the question
-            for i, (term, definition) in enumerate(terms, 1):
-                built_question["T" + str(i)] = term
-                built_question["D" + str(i)] = definition
-        case "Essay":
-            built_question['Type'] = "Ess"
-            
-            # pass fields for guidelines and format
-            built_question['Guidelines'] = guidelines
-            built_question['Format'] = str(format)
-            
-            # if the format was 1, also pass the language
-            built_question['Language'] = language if format == 1 else "N/A"
-        case _:
-            print("Failed to build question due to illegal input!")
-            return None
-                
-    # pass if the question is forced to display in some state
-    built_question['Forced'] = str(forced) if not forced is None else "0"
-    
-    # if there is an explaination, pass that in
-    if explaination is not None:
-        built_question['Explaination'] = explaination
-        
-    # return the built question object
-    return built_question
 
 def get_random_context_segment(context, cutoff):
     # split the context segment into words and randomly choose a segment of those words based on the cuttoff
@@ -478,12 +481,6 @@ def grade_essay_question(question, answer, domain, context, api_key, model):
     # First retrieve an image embed if it exists
     img_link = get_image_embed_links_if_any(question["Question"])
     
-    # initalize client and domain/context segments
-    client = OpenAI(api_key=api_key)
-    domain_c = "Domain: " + domain + "\n"
-    context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-    model_c = determine_model_str_from_index(model)
-    
     # determine how the student response will be graded 
     match question['Format']:
         case "0": # Explaination
@@ -493,32 +490,32 @@ def grade_essay_question(question, answer, domain, context, api_key, model):
         case "2": # Proof
             format = "Graded as a proof; "
             
+    # determine the difficulty of the question
+    match question['Difficulty']:
+        case "0": # Easy
+            request_difficulty = REQUEST_EXAMPLE_GRADE_ESSAY_GUIDELINES_EASY
+        case "1": # Medium
+            request_difficulty = REQUEST_EXAMPLE_GRADE_ESSAY_GUIDELINES_MEDIUM
+        case "2": # Hard
+            request_difficulty = REQUEST_EXAMPLE_GRADE_ESSAY_GUIDELINES_HARD
+            
     # Get the response from the GPT
-    response = client.chat.completions.create (
-        model = model_c,
-        messages = [
-            {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_GRADE_ESSAY_GUIDELINES + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-            {
-                "role":"user",
-                "content": [
-                    {"type": "text", "text": domain_c + context_c + format + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Guidelines: " + question["Guidelines"] + "\n" +  REQUEST_GRADE_ESSAY_GUIDELINES + "\nInput Response: " + answer},
-                    {"type": "image_url", "image_url": {
-                        "url": img_link
-                    }} 
-                ] if img_link != "" else [
-                    {"type": "text", "text": domain_c + context_c + format + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Guidelines: " + question["Guidelines"] + "\n" +  REQUEST_GRADE_ESSAY_GUIDELINES + "\nInput Response: " + answer}
-                ]
-            }
-        ]
-    )
-
-    # split the response into the grade and explaination
-    result = response.choices[0].message.content.strip().replace('\\\\', '\\')
-    grade = int(result.split("~")[0])
-    explaination = result.split("~")[1]
-    
-    # override the question's explaination with the one the AI cooked up
-    question["Explaination"] = explaination
+    try:
+        system_content = SYSTEM_INTRO + request_difficulty + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")
+        response_content = format + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Guidelines: " + question["Guidelines"] + "\n" +  REQUEST_GRADE_ESSAY_GUIDELINES + "\nInput Response: " + answer
+        response = call_gpt(domain, context, api_key, model, system_content, response_content, img_link)
+        
+        # split the response into the grade and explaination
+        result = response.strip().replace('\\\\', '\\')
+        grade = int(result.split("~")[0])
+        explaination = result.split("~")[1]
+        
+        # override the question's explaination with the one the AI cooked up
+        question["Explaination"] = explaination
+    except TimeoutError:
+        # fail to grade
+        messagebox.showerror("GPT Call Fail!", "A call to ChatGPT to grade an essay question timed out! So it will unfortunately not be graded.")
+        grade = 10
     
     # return the score
     return int(grade)
@@ -562,48 +559,31 @@ def unscramble_matching(question, domain, context, api_key, model):
     for i in range(pair_count):
         terms += [question["T" + str(i + 1)]]
         definitions += [question["D" + str(i + 1)]]
-        
-    # initalize client and domain/context segments
-    client = OpenAI(api_key=api_key)
-    domain_c = "Domain: " + domain + "\n"
-    context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-    model_c = determine_model_str_from_index(model)
     
-    # have the GPT unscramble the term-definition pairs
-    response = client.chat.completions.create (
-        model = model_c,
-        messages = [
-            {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_UNSCRAMBLE + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-            {
-                "role":"user",
-                "content": [
-                    {"type": "text", "text": domain_c + context_c + REQUEST_UNSCRAMBLE + "Question: " + remove_backticked_imbeds(question["Question"]) + "Terms: " + "\n".join([f"{i + 1}. {term}" for i, term in enumerate(terms)]) + "\nDefinitions: " + "\n".join([f"{i + 1}. {defin}" for i, defin in enumerate(definitions)])},
-                    {"type": "image_url", "image_url": {
-                        "url": img_link
-                    }} 
-                ] if img_link != "" else [
-                    {"type": "text", "text": domain_c + context_c + REQUEST_UNSCRAMBLE + "Question: " + remove_backticked_imbeds(question["Question"]) + "Terms: " + "\n".join([f"{i + 1}. {term}" for i, term in enumerate(terms)]) + "\nDefinitions: " + "\n".join([f"{i + 1}. {defin}" for i, defin in enumerate(definitions)])}
-                ]
-            }
-        ]
-    )
-    
-    # the result is a list of definition indexes in the order of how they are supposed to match with the term indexes
-    # using the list, simply iterate in the order of the definitions and update them according to our array of numbers
-    print(response.choices[0].message.content)
+    # Get the response from the GPT
     try:
-        matchings = [int(num) for num in response.choices[0].message.content.split(",")]
-        for i in range(pair_count):
-            question['D' + str(i + 1)] = definitions[matchings[i] - 1]
+        system_content = SYSTEM_INTRO + REQUEST_EXAMPLE_UNSCRAMBLE + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")
+        response_content = REQUEST_UNSCRAMBLE + "Question: " + remove_backticked_imbeds(question["Question"]) + "Terms: " + "\n".join([f"{i + 1}. {term}" for i, term in enumerate(terms)]) + "\nDefinitions: " + "\n".join([f"{i + 1}. {defin}" for i, defin in enumerate(definitions)])
+        response = call_gpt(domain, context, api_key, model, system_content, response_content, img_link)
         
-    except Exception as e:
-        print("GPT failed the matching: " + str(e))
-        
-        return
-    
-    for i in range(pair_count):
-        print(question['T' + str(i + 1)] + ": " + question['D' + str(i + 1)])
+        # the result is a list of definition indexes in the order of how they are supposed to match with the term indexes
+        try:
+            # using the list, simply iterate in the order of the definitions and update them according to our array of numbers
+            matchings = [int(num) for num in response.split(",")]
+            for i in range(pair_count):
+                question['D' + str(i + 1)] = definitions[matchings[i] - 1]
+            
+        except Exception as e:
+            # report if this generates an exception when parsing
+            messagebox.showerror("GPT Error!", "ChatGPT was unable to unscrable these terms and definitions.")
+            print("GPT failed the matching: " + str(e))
+            
+            return
+    except TimeoutError:
+        # fail to unscramble
+        messagebox.showerror("GPT Call Fail!", "The call to unscramble these terms and definitions timed out, so they were not unscrambled!")
 
+        return
 
 def parallelized_blank_fill(question, banned_items, id, domain, context, api_key, model):
     # First retrieve an image embed if it exists
@@ -612,63 +592,39 @@ def parallelized_blank_fill(question, banned_items, id, domain, context, api_key
     # convert the banned items into a stringed list
     banned_list = ", ".join(banned_items)
     
-    # initalize client and domain/context segments
-    client = OpenAI(api_key=api_key)
-    domain_c = "Domain: " + domain + "\n"
-    context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-    model_c = determine_model_str_from_index(model)
-    
     if question["T" + str(id)] == "" and question["D" + str(id)] != "":
         # Get the response from the GPT
-        response = client.chat.completions.create (
-            model = model_c,
-            messages = [
-                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_GENERATE_TERM.replace("{X}", banned_list) + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-                {
-                    "role":"user",
-                    "content": [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_TERM + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Definition: " + question["D" + str(id)]},
-                        {"type": "image_url", "image_url": {
-                            "url": img_link
-                        }} 
-                    ] if img_link != "" else [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_TERM + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Definition: " + question["D" + str(id)]}
-                    ]
-                }
-            ]
-        )
-
-        # idealy, the response should just be as simple as the term to use here, so we can 1-to-1 use it without any further parsing!
-        # regardless, at least sanitize the response a little bit.
-        question["T" + str(id)] = response.choices[0].message.content.strip().replace('\\\\', '\\')
-        
-        # add to term log to make sure we dont see this term again as a duplicate!
-        banned_items += [question["T" + str(id)]]
+        try:
+            system_content = SYSTEM_INTRO + REQUEST_EXAMPLE_GENERATE_TERM.replace("{X}", banned_list) + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")
+            response_content =  REQUEST_GENERATE_TERM + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Definition: " + question["D" + str(id)]
+            response = call_gpt(domain, context, api_key, model, system_content, response_content, img_link)
+            
+            # idealy, the response should just be as simple as the term to use here, so we can 1-to-1 use it without any further parsing!
+            # regardless, at least sanitize the response a little bit.
+            question["T" + str(id)] = response.strip().replace('\\\\', '\\')
+            
+            # add to term log to make sure we dont see this term again as a duplicate!
+            banned_items += [question["T" + str(id)]]
+        except TimeoutError:
+            # fail
+            messagebox.showerror("GPT Call Fail!", "The call to ChatGPT to fill in the term timed out!")
+            return
     if question["D" + str(id)] == "" and question["T" + str(id)] != "":
         # Get the response from the GPT
-        response = client.chat.completions.create (
-            model = model_c,
-            messages = [
-                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_GENERATE_DEFINITION.replace("{X}", banned_list) + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-                {
-                    "role":"user",
-                    "content": [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_DEFINITION + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Term: " + question["T" + str(id)]},
-                        {"type": "image_url", "image_url": {
-                            "url": img_link
-                        }} 
-                    ] if img_link != "" else [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_DEFINITION + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Term: " + question["T" + str(id)]}
-                    ]
-                }
-            ]
-        )
-
-        # idealy, the response should just be as simple as the term to use here, so we can 1-to-1 use it without any further parsing!
-        question["D" + str(id)] = response.choices[0].message.content.strip().replace('\\\\', '\\')
-        
-        # add to term log to make sure we dont see this term again as a duplicate!
-        banned_items += [question["D" + str(id)]]
+        try:
+            system_content = SYSTEM_INTRO + REQUEST_EXAMPLE_GENERATE_DEFINITION.replace("{X}", banned_list) + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")
+            response_content = REQUEST_GENERATE_DEFINITION + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Term: " + question["T" + str(id)]
+            response = call_gpt(domain, context, api_key, model, system_content, response_content, img_link)
+            
+            # idealy, the response should just be as simple as the term to use here, so we can 1-to-1 use it without any further parsing!
+            question["D" + str(id)] = response.strip().replace('\\\\', '\\')
+            
+            # add to term log to make sure we dont see this term again as a duplicate!
+            banned_items += [question["D" + str(id)]]
+        except TimeoutError:
+            # fail
+            messagebox.showerror("GPT Call Fail!", "The call to ChatGPT to fill in the definition timed out!")
+            return
 
 def fill_matching_options(question, scrambled, domain, context, api_key, model):
     # iterate through the term definition pairs of the question
@@ -685,41 +641,26 @@ def fill_matching_options(question, scrambled, domain, context, api_key, model):
     if matchings == 0:
         # First retrieve an image embed if it exists
         img_link = get_image_embed_links_if_any(question["Question"])
-    
-        # initalize client and domain/context segments
-        client = OpenAI(api_key=api_key)
-        domain_c = "Domain: " + domain + "\n"
-        context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-        model_c = determine_model_str_from_index(model)
         
-        # Get the terms from the GPT
-        response = client.chat.completions.create (
-            model = model_c,
-            messages = [
-                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_INITAL_TERMS + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-                {
-                    "role":"user",
-                    "content": [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_INITAL_TERMS + remove_backticked_imbeds(question["Question"])},
-                        {"type": "image_url", "image_url": {
-                            "url": img_link
-                        }} 
-                    ] if img_link != "" else [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_INITAL_TERMS + remove_backticked_imbeds(question["Question"])}
-                    ]
-                }
-            ]
-        )
+        # Get the response from the GPT
+        try:
+            system_content = SYSTEM_INTRO + REQUEST_EXAMPLE_INITAL_TERMS + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")
+            response_content = REQUEST_INITAL_TERMS + remove_backticked_imbeds(question["Question"])
+            response = call_gpt(domain, context, api_key, model, system_content, response_content, img_link)
+            
+            # Split the response and use that as our new defacto term list
+            terms = [term.strip() for term in response.split(',')]
+            
+            # Create keys in our question according to the number of terms that we have
+            for i in range(len(terms)):
+                question["T" + str(i + 1)] = terms[i]
+                question["D" + str(i + 1)] = ""
+            matchings = len(terms)
+        except TimeoutError:
+            # fail
+            messagebox.showerror("GPT Call Fail!", "The call to ChatGPT to generate terms timed out!")
+            return
         
-        # Split the response and use that as our new defacto term list
-        terms = [term.strip() for term in response.choices[0].message.content.split(',')]
-        
-        # Create keys in our question according to the number of terms that we have
-        for i in range(len(terms)):
-            question["T" + str(i + 1)] = terms[i]
-            question["D" + str(i + 1)] = ""
-        matchings = len(terms)
-    
     # fill the blanks in parallel based on what component is missing:
     failsafe = 0
     while any(question[f"T{i}"] == "" for i in range(1, matchings + 1)) or any(question[f"D{i}"] == "" for i in range(1, matchings + 1)) and failsafe < 5:
@@ -771,12 +712,6 @@ def fill_essay_guidelines(question, domain, context, api_key, model):
     # First retrieve an image embed if it exists
     img_link = get_image_embed_links_if_any(question["Question"])
     
-    # initalize client and domain/context segments
-    client = OpenAI(api_key=api_key)
-    domain_c = "Domain: " + domain + "\n"
-    context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-    model_c = determine_model_str_from_index(model)
-    
     # determine how the student response will be graded 
     match question['Format']:
         case "0": # Explaination
@@ -789,97 +724,73 @@ def fill_essay_guidelines(question, domain, context, api_key, model):
     # Check if we are missing the guidelines to the question
     if question["Guidelines"] == "":
         # Get the response from the GPT
-        response = client.chat.completions.create (
-            model = model_c,
-            messages = [
-                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_GENERATE_ESSAY_GUIDELINES + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-                {
-                    "role":"user",
-                    "content": [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_ESSAY_GUIDELINES + format + "Question: "+ remove_backticked_imbeds(question["Question"])},
-                        {"type": "image_url", "image_url": {
-                            "url": img_link
-                        }} 
-                    ] if img_link != "" else [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_GENERATE_ESSAY_GUIDELINES + format + "Question: "+ remove_backticked_imbeds(question["Question"])}
-                    ]
-                }
-            ]
-        )
-
-        # idealy, the response should just be as simple as the guidelines for which we follow, so we just sanitize and use it directly
-        question["Guidelines"] = response.choices[0].message.content.strip().replace('\\\\', '\\')
+        try:
+            system_content = SYSTEM_INTRO + REQUEST_EXAMPLE_GENERATE_ESSAY_GUIDELINES + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")
+            response_content = REQUEST_GENERATE_ESSAY_GUIDELINES + format + "Question: "+ remove_backticked_imbeds(question["Question"])
+            response = call_gpt(domain, context, api_key, model, system_content, response_content, img_link)
+            
+            # idealy, the response should just be as simple as the guidelines for which we follow, so we just sanitize and use it directly
+            question["Guidelines"] = response.strip().replace('\\\\', '\\')
+        except TimeoutError:
+            # fail
+            messagebox.showerror("GPT Call Fail!", "The call to ChatGPT to generate essay guidelines timed out!")
+            return
 
 def fill_multiple_choice_options(question, domain, context, api_key, model):
     # First retrieve an image embed if it exists
     img_link = get_image_embed_links_if_any(question["Question"])
 
-    # initalize client and domain/context segments
-    client = OpenAI(api_key=api_key)
-    domain_c = "Domain: " + domain + "\n"
-    context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-    model_c = determine_model_str_from_index(model)
-
     # Determine what parts of the question we are missing
     # Generate the correct answer(s) and incorrect answer(s) if both are (effectively) missing
     if not "C1" in question.keys() and (not "A1" in question.keys() or ("A1" in question.keys() and not "A2" in question.keys())) :
         # Get the response from the GPT
-        response = client.chat.completions.create (
-            model = model_c,
-            messages = [
-                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_ALL_CHOICES + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-                {
-                    "role":"user",
-                    "content": [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_ALL_CHOICES + remove_backticked_imbeds(question["Question"])},
-                        {"type": "image_url", "image_url": {
-                            "url": img_link
-                        }} 
-                    ] if img_link != "" else [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_ALL_CHOICES + remove_backticked_imbeds(question["Question"])}
-                    ]
-                }
-            ]
-        )
-
-        # Parse to get the correct and incorrect answers generated
         try:
-            # iterate through the output
-            lines = response.choices[0].message.content.split('\n')
-            cur_key = ""
-            num_cor = 0
-            num_incor = 0 if not "A1" in question.keys() else 1
-            for line in lines:
-                # check if this line contains a correct answer
-                if line.strip().startswith('C~'):
-                    # get the new key
-                    num_cor += 1
-                    cur_key = "C" + str(num_cor)
-                    
-                    # set this line into the question dictionary
-                    question[cur_key] = line[2:].strip()
-                # check if this line contains a incorrect answer
-                elif line.strip().startswith('I~'):
-                    # get the new key
-                    num_incor += 1
-                    cur_key = "A" + str(num_incor)
-                    
-                    # set this line into the question dictionary
-                    question[cur_key] = line[2:].strip()
-                # otherwise is continuation of previous line
-                else:
-                    # if we enter here without a key, something went wrong
-                    if cur_key == "":
-                        raise Exception()
-                    
-                    # append this line to the previous on a newline
-                    question[cur_key] = "\n" + line.strip()
-        except Exception as e:
-            # prompt error and prevent submit
-            print("Failed call to GPT!")
-        
+            system_content = SYSTEM_INTRO + REQUEST_EXAMPLE_ALL_CHOICES + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")
+            response_content = REQUEST_ALL_CHOICES + remove_backticked_imbeds(question["Question"])
+            response = call_gpt(domain, context, api_key, model, system_content, response_content, img_link)
+            
+            # Parse to get the correct and incorrect answers generated
+            try:
+                # iterate through the output
+                lines = response.split('\n')
+                cur_key = ""
+                num_cor = 0
+                num_incor = 0 if not "A1" in question.keys() else 1
+                for line in lines:
+                    # check if this line contains a correct answer
+                    if line.strip().startswith('C~'):
+                        # get the new key
+                        num_cor += 1
+                        cur_key = "C" + str(num_cor)
+                        
+                        # set this line into the question dictionary
+                        question[cur_key] = line[2:].strip()
+                    # check if this line contains a incorrect answer
+                    elif line.strip().startswith('I~'):
+                        # get the new key
+                        num_incor += 1
+                        cur_key = "A" + str(num_incor)
+                        
+                        # set this line into the question dictionary
+                        question[cur_key] = line[2:].strip()
+                    # otherwise is continuation of previous line
+                    else:
+                        # if we enter here without a key, something went wrong
+                        if cur_key == "":
+                            raise Exception()
+                        
+                        # append this line to the previous on a newline
+                        question[cur_key] = "\n" + line.strip()
+            except Exception as e:
+                # prompt error and prevent submit
+                messagebox.showerror("GPT Failed!", "The call to ChatGPT to generate the multiple choice options failed: " + str(e))
+                print("Failed call to GPT!")
+            
+                return
+        except TimeoutError:
+            # fail
+            messagebox.showerror("GPT Call Fail!", "The call to ChatGPT to generate the multiple choice options timed out!")
             return
-        
     
     # generate several incorrect answers if they are missing for several correct answers
     elif "C2" in question.keys() and not "A1" in question.keys():
@@ -893,52 +804,44 @@ def fill_multiple_choice_options(question, domain, context, api_key, model):
         content = "Question: " + remove_backticked_imbeds(question['Question']) + "\n" + remove_backticked_imbeds(correct_answers_c) + "\n"
 
         # Get the response from the GPT
-        response = client.chat.completions.create (
-            model = model_c,
-            messages = [
-                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_INCORRECT_CHOICES_MULTIPLE_CORRECT + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-                {
-                    "role":"user",
-                    "content": [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_INCORRECT_CHOICES_MULTIPLE_CORRECT.replace("{X}", str(correct_count)) + content},
-                        {"type": "image_url", "image_url": {
-                            "url": img_link
-                        }} 
-                    ] if img_link != "" else [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_INCORRECT_CHOICES_MULTIPLE_CORRECT.replace("{X}", str(correct_count)) + content}
-                    ]
-                }
-            ]
-        )
-
-        # Parse to get the correct and incorrect answers generated
         try:
-            # iterate through the output
-            lines = response.choices[0].message.content.split('\n')
-            cur_key = ""
-            num_cor = 0
-            num_incor = 0
-            for line in lines:
-                # check if this line contains a incorrect answer
-                if line.strip().startswith('I~'):
-                    # get the new key
-                    num_incor += 1
-                    cur_key = "A" + str(num_incor)
-                    
-                    # set this line into the question dictionary
-                    question[cur_key] = line[2:].strip()
-                # otherwise is continuation of previous line
-                else:
-                    # if we enter here without a key, something went wrong
-                    if cur_key == "":
-                        raise Exception()
-                    
-                    # append this line to the previous on a newline
-                    question[cur_key] = "\n" + line.strip()
-        except Exception as e:
-            # prompt error and prevent submit
-            print("Failed call to GPT!")
-        
+            system_content = SYSTEM_INTRO + REQUEST_EXAMPLE_INCORRECT_CHOICES_MULTIPLE_CORRECT + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")
+            response_content = REQUEST_INCORRECT_CHOICES_MULTIPLE_CORRECT.replace("{X}", str(correct_count)) + content
+            response = call_gpt(domain, context, api_key, model, system_content, response_content, img_link)
+            
+            # Parse to get the correct and incorrect answers generated
+            try:
+                # iterate through the output
+                lines = response.split('\n')
+                cur_key = ""
+                num_cor = 0
+                num_incor = 0
+                for line in lines:
+                    # check if this line contains a incorrect answer
+                    if line.strip().startswith('I~'):
+                        # get the new key
+                        num_incor += 1
+                        cur_key = "A" + str(num_incor)
+                        
+                        # set this line into the question dictionary
+                        question[cur_key] = line[2:].strip()
+                    # otherwise is continuation of previous line
+                    else:
+                        # if we enter here without a key, something went wrong
+                        if cur_key == "":
+                            raise Exception()
+                        
+                        # append this line to the previous on a newline
+                        question[cur_key] = "\n" + line.strip()
+            except Exception as e:
+                # prompt error and prevent submit
+                messagebox.showerror("GPT Failed!", "The call to ChatGPT to generate the multiple choice options failed: " + str(e))
+                print("Failed call to GPT!")
+            
+                return
+        except TimeoutError:
+            # fail
+            messagebox.showerror("GPT Call Fail!", "The call to ChatGPT to generate the multiple choice options timed out!")
             return
         
     # select a correct answer from the incorrect answers if enough incorrect answers are given.
@@ -953,71 +856,63 @@ def fill_multiple_choice_options(question, domain, context, api_key, model):
         content = "Question: " + remove_backticked_imbeds(question['Question']) + "\n" + answer_choices_c + "\n"
 
         # Get the response from the GPT
-        response = client.chat.completions.create (
-            model = model_c,
-            messages = [
-                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_SELECT_CORRECT_CHOICE + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-                {
-                    "role":"user",
-                    "content": [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_SELECT_CORRECT_CHOICE + content},
-                        {"type": "image_url", "image_url": {
-                            "url": img_link
-                        }} 
-                    ] if img_link != "" else [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_SELECT_CORRECT_CHOICE + content}
-                    ]
-                }
-            ]
-        )
-
-        choices = []
-
-        # parse
-        print(response.choices[0].message.content.split('\n'))
-        choice_num = 0
-        for key, value in question.items():
-            if "A" in key:
-                choices.append(value)
-                choice_num += 1
-        while choice_num > 0:
-            del question["A" + str(choice_num)]
-            choice_num -= 1
-
-        # Parse to get the correct and incorrect answers generated
         try:
-            # iterate through the output
-            lines = response.choices[0].message.content.split(',')
-            cur_key = ""
-            choice_num = len(lines)
-            for i in range(len(lines) - 1, -1, -1):
-                line = lines[i]
-                # validate this choice
-                if line.strip().startswith('A'):
-                    # get the new key
-                    cur_key = "C" + str(choice_num)
-                    choice_num -= 1
-                    
-                    # set this line into the question dictionary
-                    answer = int(line.strip()[1])
-                    question[cur_key] = choices.pop(answer - 1)
+            system_content = SYSTEM_INTRO + REQUEST_EXAMPLE_SELECT_CORRECT_CHOICE + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")
+            response_content = REQUEST_SELECT_CORRECT_CHOICE + content
+            response = call_gpt(domain, context, api_key, model, system_content, response_content, img_link)
+            
+            choices = []
 
-                # otherwise is continuation of previous line
-                else:
-                    # if we enter here, we have a problem
-                    raise Exception()
-        except Exception as e:
-            # prompt error and prevent submit
-            print("Failed call to GPT!: " + str(e))
-        
+            # parse
+            print(response.split('\n'))
+            choice_num = 0
+            for key, value in question.items():
+                if "A" in key:
+                    choices.append(value)
+                    choice_num += 1
+            while choice_num > 0:
+                del question["A" + str(choice_num)]
+                choice_num -= 1
+
+            # Parse to get the correct and incorrect answers generated
+            try:
+                # iterate through the output
+                lines = response.split(',')
+                cur_key = ""
+                choice_num = len(lines)
+                for i in range(len(lines) - 1, -1, -1):
+                    line = lines[i]
+                    # validate this choice
+                    if line.strip().startswith('A'):
+                        # get the new key
+                        cur_key = "C" + str(choice_num)
+                        choice_num -= 1
+                        
+                        # set this line into the question dictionary
+                        answer = int(line.strip()[1])
+                        question[cur_key] = choices.pop(answer - 1)
+
+                    # otherwise is continuation of previous line
+                    else:
+                        # if we enter here, we have a problem
+                        raise Exception()
+            
+            except Exception as e:
+                # prompt error and prevent submit
+                messagebox.showerror("GPT Failed!", "The call to ChatGPT to generate the multiple choice options failed: " + str(e))
+                print("Failed call to GPT!")
+            
+                return
+            
+            # push the remainder of the list as incorrect answer choices
+            choice_num = 1
+            for item in choices:
+                question["A" + str(choice_num)] = item
+                choice_num += 1
+        except TimeoutError:
+            # fail
+            messagebox.showerror("GPT Call Fail!", "The call to ChatGPT to generate the multiple choice options timed out!")
             return
-        
-        # push the remainder of the list as incorrect answer choices
-        choice_num = 1
-        for item in choices:
-            question["A" + str(choice_num)] = item
-            choice_num += 1
-
         
     # generate incorrect answers if they are missing for a single correct answer
     elif "C1" in question.keys() and not "A1" in question.keys():
@@ -1025,52 +920,51 @@ def fill_multiple_choice_options(question, domain, context, api_key, model):
         content = "Question: " + remove_backticked_imbeds(question["Question"]) + "\nCorrect Answer: " + remove_backticked_imbeds(question["C1"]) + "\n"
 
         # Get the response from the GPT
-        response = client.chat.completions.create (
-            model = model_c,
-            messages = [
-                {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_INCORRECT_CHOICES_SINGLE_CORRECT + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-                {
-                    "role":"user",
-                    "content": [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_INCORRECT_CHOICES_SINGLE_CORRECT + content},
-                        {"type": "image_url", "image_url": {
-                            "url": img_link
-                        }} 
-                    ] if img_link != "" else [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_INCORRECT_CHOICES_SINGLE_CORRECT + content}
-                    ]
-                }
-            ]
-        )
-
-        # Parse to get the correct and incorrect answers generated
         try:
-            # iterate through the output
-            lines = response.choices[0].message.content.split('\n')
-            cur_key = ""
-            num_cor = 0
-            num_incor = 0
-            for line in lines:
-                # check if this line contains a incorrect answer
-                if line.strip().startswith('I~'):
-                    # get the new key
-                    num_incor += 1
-                    cur_key = "A" + str(num_incor)
-                    
-                    # set this line into the question dictionary
-                    question[cur_key] = line[2:].strip()
-                # otherwise is continuation of previous line
-                else:
-                    # if we enter here without a key, something went wrong
-                    if cur_key == "":
-                        raise Exception()
-                    
-                    # append this line to the previous on a newline
-                    question[cur_key] = "\n" + line.strip()
-        except Exception as e:
-            # prompt error and prevent submit
-            print("Failed call to GPT!")
-        
+            system_content = SYSTEM_INTRO + REQUEST_EXAMPLE_INCORRECT_CHOICES_SINGLE_CORRECT + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")
+            response_content = REQUEST_INCORRECT_CHOICES_SINGLE_CORRECT + content
+            response = call_gpt(domain, context, api_key, model, system_content, response_content, img_link)
+
+            # Parse to get the correct and incorrect answers generated
+            try:
+                # iterate through the output
+                lines = response.split('\n')
+                cur_key = ""
+                num_cor = 0
+                num_incor = 0
+                for line in lines:
+                    # check if this line contains a incorrect answer
+                    if line.strip().startswith('I~'):
+                        # get the new key
+                        num_incor += 1
+                        cur_key = "A" + str(num_incor)
+                        
+                        # set this line into the question dictionary
+                        question[cur_key] = line[2:].strip()
+                    # otherwise is continuation of previous line
+                    else:
+                        # if we enter here without a key, something went wrong
+                        if cur_key == "":
+                            raise Exception()
+                        
+                        # append this line to the previous on a newline
+                        question[cur_key] = "\n" + line.strip()
+            
+            except Exception as e:
+                # prompt error and prevent submit
+                messagebox.showerror("GPT Failed!", "The call to ChatGPT to generate the multiple choice options failed: " + str(e))
+                print("Failed call to GPT!")
+            
+                return
+            
+            # push the remainder of the list as incorrect answer choices
+            choice_num = 1
+            for item in choices:
+                question["A" + str(choice_num)] = item
+                choice_num += 1
+        except TimeoutError:
+            # fail
+            messagebox.showerror("GPT Call Fail!", "The call to ChatGPT to generate the multiple choice options timed out!")
             return
 
 def get_question_sample(bank):
@@ -1149,12 +1043,6 @@ def generate_questions(sample, count, domain, context, api_key, model, t_results
     if count == 0:
         return []
     
-    # create client
-    client = OpenAI(api_key=api_key)
-    domain_c = "Domain: " + domain + "\n"
-    context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-    model_c = determine_model_str_from_index(model)
-    
     # get a textual representation of the prompt count to emphasize the amount requested
     if count == 1:
         num_of_questions = "ONE"
@@ -1174,124 +1062,54 @@ def generate_questions(sample, count, domain, context, api_key, model, t_results
             # see if we are writing the question
             if key == "Question":
                 questions += "Q~ " + remove_backticked_imbeds(value) + "\n"
-            elif "C" in key:
-                questions += "C~ " + value + "\n"
-            elif "A" in key:
-                questions += "I~ " + value + "\n"
-            elif "T" in key and key != "Type":
-                questions += f"{key}~ " + value + "\n"
-            elif "D" in key:
-                questions += f"{key}~ " + value + "\n"
-            elif "Guidelines" in key:
-                questions += 'G~ "' + value + '"\n'
-            elif "Format" in key:
-                questions += "F~ " + value + "\n"
-            elif "Language" in key:
-                questions += "L~ " + value + "\n"
-            elif key == "Explaination":
-                questions += "E~ " + value + "\n"
         # append seperator
         questions += "\n"
         
-    # prompt the GPT for the question
-    response = client.chat.completions.create (
-        model = model_c,
-        presence_penalty= 2,
-        messages = [
-            {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_QUESTIONS.replace('{X}', str(len(sample))).replace('{Y}', num_of_questions) + SYSTEM_CONCLUSION},
-            {
-                "role":"user",
-                "content": [
-                    {"type": "text", "text": domain_c + context_c + questions + REQUEST_QUESTIONS.replace('{X}', num_of_questions)}
-                ]
-            }
-        ]
-    )
-    
-    # parse the output produced by the GPT by splitting by the line
-    result = response.choices[0].message.content.split('\n')
-    
-    # if the sample was TD, we need to count how many terms/definitions we got
-    num_of_terms = 0
-    if sample[0]['Type'] == 'TD':
-        for line in result:
-            if line.strip().startswith("T"):
-                num_of_terms = max(num_of_terms, int(line.split("~")[0][1:]))
-            
-    # write key dictionary for setting keys
-    setting_keys = {"Question": "", "Explaination": ""}
-    
-    # if sample is Ess, add base keys for guidelines, format, and language
-    if sample[0]['Type'] == 'Ess':
-        setting_keys['Guidelines'] = ""
-        setting_keys['Format'] = sample[0]['Format']
-        setting_keys['Language'] = ""
-    
-    # use lists to keep track of items that we have multiplies of
-    key = ""
-    content = ""
-    corrects = []
-    incorrects = []
-    terms = [["",""] for _ in range(num_of_terms)]
-    for line in result:
-        # check if this line has a key
-        if "~" in line:
-            # push iterable based on previous key
-            if key.startswith("C"):
-                corrects += [content.strip()]
-            elif key.startswith("I"):
-                incorrects += [content.strip()]
-            elif key.startswith("T"):
-                terms[int(key[1:]) - 1][0] = content.strip()
-            elif key.startswith("D"):
-                terms[int(key[1:]) - 1][1] = content.strip()
-            
-            # define a new key and remove the prefix from the line
-            key, item = tuple([ln.strip() for ln in line.split("~", 2)])
-            
-            # clear content for new line
-            content = ""
+    # Get the response from the GPT
+    try:
+        rng_context = get_random_context_segment(context, CONTEXT_CUTOFF)
+        system_content = SYSTEM_INTRO + REQUEST_EXAMPLE_QUESTIONS.replace('{X}', str(len(sample))).replace('{Y}', num_of_questions) + SYSTEM_CONCLUSION
+        response_content = questions + REQUEST_QUESTIONS.replace('{X}', num_of_questions)
+        response = call_gpt(domain, rng_context, api_key, model, system_content, response_content, "")
+        
+        # using the question component, construct a dummy question object based on what the sample type was
+        new_question = {
+            "Question": response.split('~')[1],
+            "AI Generated": "True",
+            "Type": sample[0]["Type"],
+            "Explaination": ""
+        }
+        
+        # if this is an essay type question, we inherit settings from the sample taken
+        if new_question["Type"] == "Ess":
+            new_question["Guidelines"] = ""
+            new_question["Format"] = sample[0]["Format"]
+            new_question["Language"] = ""
+            new_question["Difficulty"] = "1"
+        # otherwise, force the question to always prompt as a MC
         else:
-            # otherwise, preserve the key and pass the line as the current item
-            item = line.strip()
+            new_question["Forced"] = "1"
         
-        # check for key keys
-        if key.startswith("Q"):
-            setting_keys['Question'] += item + " "
-        elif key.startswith("G"):
-            setting_keys['Guidelines'] += item + " "
-        elif key.startswith("L"):
-            setting_keys['Language'] += item + " "
-        elif key.startswith("E"):
-            setting_keys['Explaination'] += item + " "
-        
-        # add to iterable
-        if key.startswith("C"):
-            content += item + " "
-        elif key.startswith("I"):
-            content += item + " "
-        elif key.startswith("T"):
-            content += item + " "
-        elif key.startswith("D"):
-            content += item + " "
-            
-    # convert all term lists to tuples
-    for term in terms:
-        term = tuple(term)
+        # with the bare minimum information acquired, call the respectiving missing content function to fill in the remaining parameters
+        match new_question['Type']:
+            # to ensure consistency, the context segment that we used to generate this question will be passed along  
+            case "MC":
+                fill_multiple_choice_options(new_question, domain, rng_context, api_key, model)
+                generate_explaination_for_question(new_question, domain, rng_context, api_key, model)
+                t_results += [new_question]
+            case "TD":
+                fill_matching_options(new_question, False, domain, rng_context, api_key, model)
+                generate_explaination_for_question(new_question, domain, rng_context, api_key, model)
+                t_results += [new_question]
+            case "Ess":
+                fill_essay_guidelines(new_question, domain, rng_context, api_key, model)
+                t_results += [new_question]
     
-    # using the parsed information, attempt to construct the correct question object based on the sampling type
-    for key, val in setting_keys.items():
-        setting_keys[key] = val.strip().replace('\\', '')
-    match sample[0]['Type']:
-        case "MC":
-            t_results += [construct_question_object("Multiple Choice", setting_keys["Question"], "-1", corrects, incorrects, forced="0", explaination=setting_keys["Explaination"])]
-        case "TD":
-            t_results += [construct_question_object("Term-Definition", setting_keys["Question"], "-1", forced="0", terms=terms, explaination=setting_keys["Explaination"])]
-        case "Ess":
-            t_results += [construct_question_object("Essay", setting_keys["Question"], "-1", forced="0", guidelines=setting_keys["Guidelines"], format=setting_keys["Format"], language=setting_keys["Language"], explaination=setting_keys["Explaination"])]
-    t_results[-1]["AI Generated"] = "True"
-            
-    return
+        return
+    except TimeoutError:
+        # fail
+        messagebox.showerror("GPT Call Fail!", "The call to ChatGPT to generate the multiple choice options timed out!")
+        return
 
 def get_random_numaric_str(unique_arr, character_set, stri, unique):
     # copy the passed string to modify
@@ -1475,12 +1293,6 @@ def seed_permutations_in_question(question_text, domain, context, api_key, model
         else:
             # log segment as is
             segments[segment_c] += chunk
-                    
-    # initalize client and domain/context segments
-    client = OpenAI(api_key=api_key)
-    domain_c = "Domain: " + domain + "\n"
-    context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-    model_c = determine_model_str_from_index(model)
     
     # iterate getting responses from our client to fill in the blanks as they appear.
     # blanks already filled are considered a singular segment, the current blank appears blank and is requested to be filled, where all remaining blanks are filled with their default values.
@@ -1495,53 +1307,40 @@ def seed_permutations_in_question(question_text, domain, context, api_key, model
                 question_c += def_blank[0] + segments[i]
             else:
                 question_c += def_blank[0]
-    
-        # prompt the GPT to fill in the blank
-        response = client.chat.completions.create (
-            model = model_c,
-            presence_penalty= 2,
-            messages = [
-                {"role": "system", "content": SYSTEM_INTRO + (REQUEST_EXAMPLE_FILL_IN_BLANKS if cur_blank[1] == "reg" else REQUEST_EXAMPLE_FILL_IN_MATH) + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-                {
-                    "role":"user",
-                    "content": [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_FILL_IN_BLANKS + question_c},
-                        {"type": "image_url", "image_url": {
-                            "url": img_link
-                        }} 
-                    ] if img_link != "" else [
-                        {"type": "text", "text": domain_c + context_c + REQUEST_FILL_IN_BLANKS + question_c}
-                    ]
-                }
-            ]
-        )
         
+        # Get the response from the GPT
         try:
-            # pick one of the 5 options at basically random
-            options = response.choices[0].message.content.split('\n')
-            print(options)
-            best_option = random.choice(options)
+            system_content = SYSTEM_INTRO + (REQUEST_EXAMPLE_FILL_IN_BLANKS if cur_blank[1] == "reg" else REQUEST_EXAMPLE_FILL_IN_MATH) + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")
+            response_content = REQUEST_FILL_IN_BLANKS + question_c
+            response = call_gpt(domain, context, api_key, model, system_content, response_content, img_link)
+            
+            try:
+                # pick one of the 5 options at basically random
+                options = response.split('\n')
+                print(options)
+                best_option = random.choice(options)
 
-            if cur_blank[1] == "reg":
-                segments.insert(0, comb_segments[0] + best_option.strip() + comb_segments[1])
-            else:
-                segments.insert(0, comb_segments[0] + "```math:" + best_option.strip() + "```" + comb_segments[1])
-        except Exception as e:
-            print("Failed call to GPT! " + str(e))
-            return None
-
+                if cur_blank[1] == "reg":
+                    segments.insert(0, comb_segments[0] + best_option.strip() + comb_segments[1])
+                else:
+                    segments.insert(0, comb_segments[0] + "```math:" + best_option.strip() + "```" + comb_segments[1])
+            except Exception as e:
+                # prompt error and prevent submit
+                messagebox.showerror("GPT Failed!", "The call to ChatGPT to generate the multiple choice options failed: " + str(e))
+                print("Failed call to GPT!")
+                
+                return None
+        except TimeoutError:
+            # fail
+            messagebox.showerror("GPT Call Fail!", "The call to ChatGPT to generate the multiple choice options timed out!")
+            return
+        
     # return the results
     return segments[0]
     
 def generate_explaination_for_question(question, domain, context, api_key, model):
     # First retrieve an image embed if it exists
     img_link = get_image_embed_links_if_any(question["Question"])
-
-    # initalize client and domain/context segments
-    client = OpenAI(api_key=api_key)
-    domain_c = "Domain: " + domain + "\n"
-    context_c = "Context: " + get_random_context_segment(context, CONTEXT_CUTOFF) + "\n"
-    model_c = determine_model_str_from_index(model)
 
     # switch based on the question content
     match question["Type"]:
@@ -1553,25 +1352,17 @@ def generate_explaination_for_question(question, domain, context, api_key, model
                     correct_answers_c += value + ", "
             content = "Question: " + remove_backticked_imbeds(question['Question']) + "\n" + remove_backticked_imbeds(correct_answers_c) + "\n"
 
-            # prompt the GPT to write the explaination
-            response = client.chat.completions.create (
-                model = model_c,
-                presence_penalty= 2,
-                messages = [
-                    {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_EXPLAINATIONS_MC + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-                    {
-                        "role":"user",
-                        "content": [
-                            {"type": "text", "text": domain_c + context_c + REQUEST_EXPLAINATIONS_MC + content},
-                            {"type": "image_url", "image_url": {
-                                "url": img_link
-                            }} 
-                        ] if img_link != "" else [
-                            {"type": "text", "text": domain_c + context_c + REQUEST_EXPLAINATIONS_MC + content}
-                        ]
-                    }
-                ]
-            )
+            # Get the response from the GPT
+            try:
+                system_content = SYSTEM_INTRO + REQUEST_EXAMPLE_EXPLAINATIONS_MC + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")
+                response_content = REQUEST_EXPLAINATIONS_MC + content
+                response = call_gpt(domain, context, api_key, model, system_content, response_content, img_link)
+                
+            except TimeoutError:
+                # fail
+                messagebox.showerror("GPT Call Fail!", "The call to ChatGPT to generate the multiple choice options timed out!")
+                return
+
         case "TD":
             # get the required content for the prompt
             matchings = "Matchings: "
@@ -1580,42 +1371,35 @@ def generate_explaination_for_question(question, domain, context, api_key, model
                 matchings += question["T" + str(i + 1)] + "-   " + question["D" + str(i + 1)] + "\t"
             content = "Question: " + remove_backticked_imbeds(question['Question']) + "\n" + matchings + "\n"
 
-            # prompt the GPT to write the explaination
-            response = client.chat.completions.create (
-                model = model_c,
-                presence_penalty= 2,
-                messages = [
-                    {"role": "system", "content": SYSTEM_INTRO + REQUEST_EXAMPLE_EXPLAINATIONS_TD + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")},
-                    {
-                        "role":"user",
-                        "content": [
-                            {"type": "text", "text": domain_c + context_c + REQUEST_EXPLAINATIONS_TD + content},
-                            {"type": "image_url", "image_url": {
-                                "url": img_link
-                            }} 
-                        ] if img_link != "" else [
-                            {"type": "text", "text": domain_c + context_c + REQUEST_EXPLAINATIONS_TD + content}
-                        ]
-                    }
-                ]
-            )
+            # Get the response from the GPT
+            try:
+                system_content = SYSTEM_INTRO + REQUEST_EXAMPLE_EXPLAINATIONS_TD + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")
+                response_content = REQUEST_EXPLAINATIONS_TD + content
+                response = call_gpt(domain, context, api_key, model, system_content, response_content, img_link)
+                
+            except TimeoutError:
+                # fail
+                messagebox.showerror("GPT Call Fail!", "The call to ChatGPT to generate the multiple choice options timed out!")
+                return
         case "Ess":
             # explainations for essay questions are generated at grade time, so we don't need to generate any explaination
             question['Explaination'] = "Explainations for essay question to be generated at grade time, so none will be provided :)"
             
             return
 
+    print(response)
     # wrap in try/except to flag an error if the api fails
     try:
         # push to explaination, sanitize
-        if "E~" in response.choices[0].message.content:
-            question['Explaination'] = response.choices[0].message.content[2:].strip().replace('\\\\', '\\').replace("\n", " ")
+        if "E~" in response:
+            question['Explaination'] = response[2:].strip().replace('\\\\', '\\').replace("\n", " ")
         else:
-            question['Explaination'] = response.choices[0].message.content.strip().replace('\\\\', '\\').replace("\n", " ")
+            question['Explaination'] = response.strip().replace('\\\\', '\\').replace("\n", " ")
+        print(question['Explaination'])
     except Exception as e:
         # prompt error and prevent submit
+        messagebox.showerror("GPT Failed!", "The call to ChatGPT to generate the multiple choice options failed: " + str(e))
         print("Failed call to GPT!")
-
         return
 
 def test_api_key(api_key):
@@ -1662,7 +1446,6 @@ def import_from_quizzy_file():
             cipher_suite = Fernet(CONTEXT_CRYPTO_KEY)
             decoded_context = cipher_suite.decrypt(extracted_values['Context'].encode("utf-8")).decode('utf-8')
             context = decoded_context
-            print(context)
             print("Read context successfully!")
             print("All contents found SUCCESSFULLY!")
             

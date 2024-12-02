@@ -335,16 +335,17 @@ class Quiz(ctk.CTkFrame):
         total = 0
         out_of_total = 0
         n = len(self.questions)
+        offset = 0
         threads = []
         while n > 0:
             for i in range(MAX_THREADS if n // MAX_THREADS > 0 else n):
-                threads.append(threading.Thread(target=self.questions[i].compute_grade))
+                threads.append(threading.Thread(target=self.questions[i + offset].compute_grade))
                 threads[i].start()
-                print("Created thread for:", self.questions[i])
             for i in range(MAX_THREADS if n // MAX_THREADS > 0 else n):
-                print(f"Waiting for thread {i}:")
                 threads[i].join()
             n -= MAX_THREADS
+            offset += MAX_THREADS
+            threads.clear()
             
         # then get the total score, but schedule the renders so they can happen concurrently?
         for question in self.questions:
@@ -390,7 +391,7 @@ class Quiz(ctk.CTkFrame):
         header_frame = ctk.CTkFrame(grade_frame, fg_color='transparent')
         grade_header = ctk.CTkLabel(header_frame, text="Your Score: ", fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'))
         grade = ctk.CTkLabel(header_frame, text=str(total) + "/" + str(out_of_total), text_color=lerp_colors(GRADE_COLOR_SCALE, percentage), fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'))
-        grade_percent = ctk.CTkLabel(header_frame, text=" (" + str(percentage * 100) + "%)", text_color=lerp_colors(GRADE_COLOR_SCALE, percentage), fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'))
+        grade_percent = ctk.CTkLabel(header_frame, text=" (" + str(round(percentage * 100, 2)) + "%)", text_color=lerp_colors(GRADE_COLOR_SCALE, percentage), fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'))
         grade_header.pack(side='left')
         grade.pack(side='left')
         grade_percent.pack(side='left')

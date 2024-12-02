@@ -166,8 +166,10 @@ class Builder(ctk.CTkFrame):
     def save_deck(self, event = None):
         try:
             # export the file information using the call in the API
+            self.modified = False
             return export_to_quizzy_file(self.domain, self.context, [question_frame.content for question_frame in self.saved_questions])
         except Exception as e:
+            self.modified = True
             messagebox.showerror("Error", f"There was an issue saving this deck: {e}")
             
  
@@ -495,7 +497,7 @@ class BuilderFrame(ctk.CTkFrame):
             case "MC":
                 self.question = MultipleChoice(self.question_frame, self.modified)
             case "TD":
-                self.question = TermDefinition(self.question_frame, self.modified)
+                self.question = TermDefinition(self.question_frame, self.modified, self.settings)
             case "Ess":
                 self.question = Essay(self.question_frame, self.modified)
         
@@ -604,6 +606,7 @@ class BuilderFrame(ctk.CTkFrame):
                 submit_list['Explaination'] = self.question.explaination
             case "Ess": # collect all correct and incorrect answers inputted, gained from the question's provided opened fields
                 submit_list['Format'] = str(self.question.format.get())
+                submit_list['Difficulty'] = str(self.question.difficulty.get())
                 submit_list["Question"] = self.question.question_entry.get('1.0', 'end-1c')
                 submit_list["Guidelines"] = self.question.guidelines_entry.get('1.0', 'end-1c')
                 if int(submit_list['Format']) == 1:
@@ -615,8 +618,14 @@ class BuilderFrame(ctk.CTkFrame):
         print(submit_list)
         
         # fail immediately if any answers match each other to prevent ambiguity in logic and for the student!
-        if len(answer_set) != len(set(answer_set)):
+        online_answer_set = [answer for answer in answer_set if answer.strip() != ""]
+        if len(online_answer_set) != len(set(online_answer_set)):
             messagebox.showwarning("Error!", "You have duplicate answer choices specified, please edit them to make them unique from each other!")
+                    
+            return
+        
+        if self.settings['Offline'] and all(str(item).strip() == "" for ___, item in submit_list.items()):
+            messagebox.showwarning("Offline!", "You cannot have any blank fields when offline!")
                     
             return
         
@@ -709,7 +718,7 @@ class BuilderFrame(ctk.CTkFrame):
         # flag being modified in the parent
         self.parent.modified = True
         
-    def modified(self, event):
+    def modified(self, event = None):
         self.is_modified = True
         
     def push_to_explaination(self, event):
@@ -799,7 +808,7 @@ class QuestionFrame(ctk.CTkFrame):
                 self.builder_frame.question = MultipleChoice(self.builder_frame.question_frame, self.builder_frame.modified, self.content)
                 self.builder_frame.enable_explaination_refresh()
             case "TD":
-                self.builder_frame.question = TermDefinition(self.builder_frame.question_frame, self.builder_frame.modified, self.content)
+                self.builder_frame.question = TermDefinition(self.builder_frame.question_frame, self.builder_frame.modified, self.builder_frame.settings, self.content)
                 self.builder_frame.enable_explaination_refresh()
             case "Ess":
                 self.builder_frame.question = Essay(self.builder_frame.question_frame, self.builder_frame.modified, self.content)
@@ -1023,7 +1032,7 @@ class MultipleChoice(ctk.CTkFrame):
             ans_field.update_index(i - self.correct_answers)
             
 class TermDefinition(ctk.CTkFrame):
-    def __init__(self, parent, modified_func, context = None):
+    def __init__(self, parent, modified_func, settings, context = None):
         super().__init__(parent, fg_color='transparent')
         
         # pack at the top of the frame 3 radio buttons allowing for questions to be "forced" to be MC, FRQ, or either
@@ -1054,17 +1063,19 @@ class TermDefinition(ctk.CTkFrame):
         self.scroll_answers = ctk.CTkScrollableFrame(self, fg_color='transparent')
         self.scroll_answers.pack(fill='x')
         
-        self.is_scrambled = ctk.CTkFrame(self, fg_color='transparent')
-        self.is_scrambled.columnconfigure((0, 1), weight=1, uniform='a')
-        self.is_scrambled.columnconfigure(2, weight=6, uniform='a')
-        self.is_scrambled.rowconfigure(0, weight=1)
-        self.scrambled_label = ctk.CTkLabel(self.is_scrambled, text="Is Scrambled: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
-        self.scrambled_label.grid(row=0, column=0)
+        # ONLY PACK THE UNSCRAMBLER IF ITS NOT THE FIRST MODEL
         self.scramble = tk.IntVar()
         self.scramble.set(0)
-        self.scrabled_toggle = ctk.CTkSwitch(self.is_scrambled, text="", variable=self.scramble, onvalue=1, offvalue=0)
-        self.scrabled_toggle.grid(row=0, column=1)
-        self.is_scrambled.pack(fill='x')
+        if str(settings["Model"]) != "0":
+            self.is_scrambled = ctk.CTkFrame(self, fg_color='transparent')
+            self.is_scrambled.columnconfigure((0, 1), weight=1, uniform='a')
+            self.is_scrambled.columnconfigure(2, weight=6, uniform='a')
+            self.is_scrambled.rowconfigure(0, weight=1)
+            self.scrambled_label = ctk.CTkLabel(self.is_scrambled, text="Is Scrambled: ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+            self.scrambled_label.grid(row=0, column=0)
+            self.scrabled_toggle = ctk.CTkSwitch(self.is_scrambled, text="", variable=self.scramble, onvalue=1, offvalue=0)
+            self.scrabled_toggle.grid(row=0, column=1)
+            self.is_scrambled.pack(fill='x')
         
         # data
         self.matching_guis = []
@@ -1192,6 +1203,18 @@ class Essay(ctk.CTkFrame):
         self.explain.pack(side='right')
         self.format_to_be.pack(expand=True, fill='both')
         
+        # also pack at the top of the frame 3 MORE radio buttons allowing for different grading difficulties
+        self.difficulty = tk.IntVar()
+        self.difficulty.set(0)
+        self.difficulty_to_be = ctk.CTkFrame(self, fg_color='transparent')
+        self.easy = ctk.CTkRadioButton(self.difficulty_to_be, radiobutton_height=9, radiobutton_width=9, text="Be Familar", variable=self.difficulty, font=(FONT, SMALL_FONT_SIZE), value=0, command=modified_func)
+        self.medium = ctk.CTkRadioButton(self.difficulty_to_be, radiobutton_height=9, radiobutton_width=9, text="Know", variable=self.difficulty, font=(FONT, SMALL_FONT_SIZE), value=1, command=modified_func)
+        self.hard = ctk.CTkRadioButton(self.difficulty_to_be, radiobutton_height=9, radiobutton_width=9, text="Master", variable=self.difficulty, font=(FONT, SMALL_FONT_SIZE), value=2, command=modified_func)
+        self.hard.pack(side='right')
+        self.medium.pack(side='right')
+        self.easy.pack(side='right')
+        self.difficulty_to_be.pack(expand=True, fill='both')
+        
         # create a frame for the question entry
         self.question = ctk.CTkFrame(self, fg_color='transparent')
         self.question.columnconfigure(0, weight=3)
@@ -1259,6 +1282,11 @@ class Essay(ctk.CTkFrame):
                 if key == 'Format':
                     # update the radio button controlled variable
                     self.format.set(int(value))
+                    
+                # is this the difficulty of the question?
+                if key == 'Difficulty':
+                    # update the radio button controlled variable
+                    self.difficulty.set(int(value))
         
         # bind the event to the question text box that resizes it on keystrokes
         self.question_data = tk.StringVar()
@@ -1268,6 +1296,9 @@ class Essay(ctk.CTkFrame):
         self.pack(fill='x')
         
     def enable_code_prompt(self):
+        # this modifies the question
+        self.modified_func()
+        
         # determine if we need to render the code prompt
         if self.format.get() == 1:
             self.code_lang.pack(fill='x', side='top', pady=2)
@@ -1322,11 +1353,11 @@ class TermMatchingField(ctk.CTkFrame):
         self.matching_label.grid(row=0, column=0, sticky='nw', pady=5)
         self.term_entry = ctk.CTkTextbox(self, font=(FONT, NORMAL_FONT_SIZE), height=20)
         self.term_entry.grid(column=1, row=0, sticky='ew', padx=10)
-        self.term_entry.bind('<KeyRelease>', lambda x:adjust_textbox_height(x, self.term_entry, 385, term_variable))
+        self.term_entry.bind('<KeyRelease>', lambda x:adjust_textbox_height(x, self.term_entry, 110, term_variable))
         self.term_entry.bind('<KeyRelease>', modified_func)
         self.definition_entry = ctk.CTkTextbox(self, font=(FONT, NORMAL_FONT_SIZE), height=20)
         self.definition_entry.grid(column=2, row=0, sticky='ew', padx=10)
-        self.definition_entry.bind('<KeyRelease>', lambda x:adjust_textbox_height(x, self.definition_entry, 385, definition_variable))
+        self.definition_entry.bind('<KeyRelease>', lambda x:adjust_textbox_height(x, self.definition_entry, 220, definition_variable))
         self.definition_entry.bind('<KeyRelease>', modified_func)
         self.delete_button = ctk.CTkButton(self, fg_color='transparent', text='X', text_color=DARK, hover_color=PRIMARY, font=(FONT, NORMAL_FONT_SIZE, 'bold'), command=lambda:remove_func(self.index))
         self.delete_button.grid(column=3, row=0, sticky='snew')

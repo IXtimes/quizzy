@@ -64,7 +64,7 @@ class Quizzy(ctk.CTk):
         self.title('Quizzy - Taking Quiz on ' + data[0])
         
         # disable close button
-        #self.protocol("WM_DELETE_WINDOW", lambda: None)
+        self.protocol("WM_DELETE_WINDOW", lambda: None)
         
         # clear out the old frame, get the quiz frame
         self.current_frame.pack_forget()
