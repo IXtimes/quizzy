@@ -1,0 +1,11 @@
+cryptography==44.0.0
+customtkinter==5.2.2
+docx2txt==0.8
+fitz==0.0.1.dev2
+matplotlib==3.8.2
+openai==1.55.3
+Pillow==11.0.0
+python_Levenshtein==0.25.1
+python_Levenshtein==0.26.1
+python_pptx==1.0.2
+Requests==2.32.3
