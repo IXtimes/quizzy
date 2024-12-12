@@ -290,9 +290,11 @@ class MainMenu(ctk.CTkFrame):
                 return
         
         # test api key
-        valid_key = test_api_key(self.apikey_frame_amnt.get('1.0', 'end-1c'))
+        valid_key = ""
+        if self.is_offline_var.get() != 1:
+            valid_key = test_api_key(self.apikey_frame_amnt.get('1.0', 'end-1c'))
         
-        if not valid_key:
+        if not valid_key and self.is_offline_var.get() != 1:
             if messagebox.askyesno("Warning", "It appears the API key that you entered is invalid, would you like to reenter a new key? Otherwise you will continue in offline mode."):
                 return
             else:

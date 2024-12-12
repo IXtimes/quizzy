@@ -13,9 +13,9 @@ import random
 import threading
 import time
 
-CONTEXT_CUTOFF = 750
-THREAD_TIMEOUT_TIME = 10
-MAX_THREADS = 12
+CONTEXT_CUTOFF = 350
+THREAD_TIMEOUT_TIME = 20
+MAX_THREADS = 5
 THREAD_SIZE = 1
 
 def call_gpt(domain, context, api_key, model, system, request, image_embed):
@@ -956,12 +956,6 @@ def fill_multiple_choice_options(question, domain, context, api_key, model):
                 print("Failed call to GPT!")
             
                 return
-            
-            # push the remainder of the list as incorrect answer choices
-            choice_num = 1
-            for item in choices:
-                question["A" + str(choice_num)] = item
-                choice_num += 1
         except TimeoutError:
             # fail
             messagebox.showerror("GPT Call Fail!", "The call to ChatGPT to generate the multiple choice options timed out!")
@@ -1016,6 +1010,7 @@ def batch_generate_questions(bank, count, domain, context, api_key, model):
         quota = MAX_THREADS * THREAD_SIZE if count >= MAX_THREADS * THREAD_SIZE else count
         num_of_threads = quota // THREAD_SIZE + 1 if quota < MAX_THREADS * THREAD_SIZE else MAX_THREADS
         size_of_last_thread = quota % THREAD_SIZE if quota < MAX_THREADS * THREAD_SIZE else THREAD_SIZE
+        print(count)
         for i in range(num_of_threads):
             # get a sample of either 3 multiple choice questions, 1 TD question, or 1 essay question, where the type of question we sample is determined by the proportion of that question type in the bank
             sample = get_question_sample(bank)
@@ -1109,6 +1104,11 @@ def generate_questions(sample, count, domain, context, api_key, model, t_results
     except TimeoutError:
         # fail
         messagebox.showerror("GPT Call Fail!", "The call to ChatGPT to generate the multiple choice options timed out!")
+        return
+    except Exception as e:
+        # fail
+        print(f"Error: {str(e)}")
+        messagebox.showerror("GPT Gen Fail!", "The call to ChatGPT generated an exception, this is expected, but you will likely have less AI questions than anticipated!")
         return
 
 def get_random_numaric_str(unique_arr, character_set, stri, unique):
@@ -1387,7 +1387,6 @@ def generate_explaination_for_question(question, domain, context, api_key, model
             
             return
 
-    print(response)
     # wrap in try/except to flag an error if the api fails
     try:
         # push to explaination, sanitize
@@ -1405,14 +1404,7 @@ def generate_explaination_for_question(question, domain, context, api_key, model
 def test_api_key(api_key):
     # test api key
     try:
-        client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "user", "content": "This is a test prompt, please respond with ONLY 'OK'"}
-            ]
-        )
-        result = response.choices[0].message.content
+        result = call_gpt("N/A", "N/A", api_key, 0, "Only respond to the user with 'OK'", "This is a test prompt, please respond with ONLY 'OK'", "")
     except Exception as e:
         return False
     
