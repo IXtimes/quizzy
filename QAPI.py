@@ -8,15 +8,17 @@ from openai import OpenAI
 import requests
 from prompts import *
 from keys import CONTEXT_CRYPTO_KEY
-from tkinter import messagebox
+from tkinter import messagebox, Tk
 import random
 import threading
 import time
 
-CONTEXT_CUTOFF = 350
+CONTEXT_CUTOFF = 150
 THREAD_TIMEOUT_TIME = 20
 MAX_THREADS = 5
-THREAD_SIZE = 1
+
+class StopThread(Exception):
+    pass
 
 def call_gpt(domain, context, api_key, model, system, request, image_embed):
     return_response = []
@@ -315,9 +317,9 @@ def validate_question_object(object):
                     object["Format"] = "0"
                     
                 # check for difficulty specification, and default to "1" if missing
-                if not "Difficulty" in object:
-                    print(f'@WARN ({q_index}): Essay question missing difficulty, defaulting to Know (1)!')
-                    object["Difficulty"] = "1"
+                if not "UseGL" in object:
+                    print(f'@WARN ({q_index}): Essay question missing toggle on if it uses guidelines, defaulting to Does not (0)!')
+                    object["UseGL"] = "0"
                 
                 # fail if format is "Code" and the language is not specified
                 if not "Language" in object or (object["Format"] == "1" and object["Language"] == "N/A"):
@@ -490,19 +492,10 @@ def grade_essay_question(question, answer, domain, context, api_key, model):
         case "2": # Proof
             format = "Graded as a proof; "
             
-    # determine the difficulty of the question
-    match question['Difficulty']:
-        case "0": # Easy
-            request_difficulty = REQUEST_EXAMPLE_GRADE_ESSAY_GUIDELINES_EASY
-        case "1": # Medium
-            request_difficulty = REQUEST_EXAMPLE_GRADE_ESSAY_GUIDELINES_MEDIUM
-        case "2": # Hard
-            request_difficulty = REQUEST_EXAMPLE_GRADE_ESSAY_GUIDELINES_HARD
-            
     # Get the response from the GPT
     try:
-        system_content = SYSTEM_INTRO + request_difficulty + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")
-        response_content = format + "Question: "+ remove_backticked_imbeds(question["Question"]) + "Guidelines: " + question["Guidelines"] + "\n" +  REQUEST_GRADE_ESSAY_GUIDELINES + "\nInput Response: " + answer
+        system_content = SYSTEM_INTRO + ((REQUEST_EXAMPLE_GRADE_ESSAY_GUIDELINES) if question["UseGL"] else (REQUEST_EXAMPLE_GRADE_ESSAY)) + SYSTEM_CONCLUSION + (IMG_SPECIFICATION if img_link != "" else "")
+        response_content = format + "Question: "+ remove_backticked_imbeds(question["Question"]) + (("Guidelines: " + question["Guidelines"] + "\n" +  REQUEST_GRADE_ESSAY_GUIDELINES) if question["UseGL"] else (REQUEST_GRADE_ESSAY)) + "\nInput Response: " + answer
         response = call_gpt(domain, context, api_key, model, system_content, response_content, img_link)
         
         # split the response into the grade and explaination
@@ -677,7 +670,12 @@ def fill_matching_options(question, scrambled, domain, context, api_key, model):
                 threads.append(threading.Thread(target=parallelized_blank_fill, args=(question, definitions, i+1, domain, context, api_key, model)))
                 threads[-1].start()
         for thread in threads:
-            thread.join()
+            thread.join(THREAD_TIMEOUT_TIME)
+    
+        # check if the thread timed out
+        if thread.is_alive():
+            raise TimeoutError("GPT call timed out!")
+        
         threads.clear()
         
         # check for duplicates and "remove" them if necessary
@@ -998,40 +996,56 @@ def get_question_sample(bank):
     # return the sample
     return sample
 
-def batch_generate_questions(bank, count, domain, context, api_key, model):
-    # store ALL AI generated questions in an accumulated list
-    ai_generated_questions = []
-    
+def kill_thread(thread, timeout):
+    try:
+        time.sleep(timeout)
+        if thread.is_alive():
+            print(f"Thread {thread.ident} timed out. Forcibly stopping.")
+            thread._stop()  # Note: This is not officially supported and should be used with caution
+    except StopThread:
+        return
+
+def generate_single_batch_of_questions(bank, num_of_threads, size_of_last_thread, domain, context, api_key, model):
     # create as many threads as needed to process the count, using constants on max threads and batch size to determine our thread distribution
     threads = []
+    monitor_threads = []
     results = []
-    while count > 0:
-        # get a quota for this iteration
-        quota = MAX_THREADS * THREAD_SIZE if count >= MAX_THREADS * THREAD_SIZE else count
-        num_of_threads = quota // THREAD_SIZE + 1 if quota < MAX_THREADS * THREAD_SIZE else MAX_THREADS
-        size_of_last_thread = quota % THREAD_SIZE if quota < MAX_THREADS * THREAD_SIZE else THREAD_SIZE
-        print(count)
+    try:
         for i in range(num_of_threads):
             # get a sample of either 3 multiple choice questions, 1 TD question, or 1 essay question, where the type of question we sample is determined by the proportion of that question type in the bank
             sample = get_question_sample(bank)
             
-            threads.append(threading.Thread(target=generate_questions, args=(sample, THREAD_SIZE if i < num_of_threads - 1 else size_of_last_thread, domain, context, api_key, model, results)))
+            threads.append(threading.Thread(target=generate_questions, args=(sample, 1 if i < num_of_threads - 1 else size_of_last_thread, domain, context, api_key, model, results)))
             threads[i].start()
+        
+            # create sentenial threads as a fail safe if these threads don't terminate
+            monitor_threads.append(threading.Thread(target=kill_thread, args=(threads[i], THREAD_TIMEOUT_TIME * 1.5)))
+            monitor_threads[i].start()
+            
+        # complete the threads (hopefully)
         for i in range(num_of_threads):
-            threads[i].join()
-        ai_generated_questions += results
-        threads.clear()
-        results.clear()
-        count -= MAX_THREADS * THREAD_SIZE
-        
-    # once all of the questions are generated, go back and update the q_indicies of every question
-    q_count = len(bank)
-    for question in ai_generated_questions:
-        q_count += 1
-        question["Q"] = str(q_count)
-        
-    # return the AI generated questions collected
-    return ai_generated_questions
+            threads[i].join(THREAD_TIMEOUT_TIME)
+            
+        # force end the sential threads
+        for i in range(num_of_threads):
+            monitor_threads[i].raise_exception(StopThread)
+            
+        # Check for failing threads, where if there are any just terminate them
+        for i in range(num_of_threads):
+            if threads[i].is_alive():
+                print(f"Thread {threads[i].ident} timed out")
+            
+        # Filter for valid results from threads
+        results = [result for result in results if result]
+    
+        # Return those results
+        return results
+    except Exception as e:
+        # Filter for valid results from threads
+        results = [result for result in results if result]
+    
+        # Return those results
+        return results
 
 def generate_questions(sample, count, domain, context, api_key, model, t_results):    
     # break immediately if we are to generate 0 questions
@@ -1080,7 +1094,7 @@ def generate_questions(sample, count, domain, context, api_key, model, t_results
             new_question["Guidelines"] = ""
             new_question["Format"] = sample[0]["Format"]
             new_question["Language"] = ""
-            new_question["Difficulty"] = "1"
+            new_question["UseGL"] = "0"
         # otherwise, force the question to always prompt as a MC
         else:
             new_question["Forced"] = "1"
@@ -1103,13 +1117,13 @@ def generate_questions(sample, count, domain, context, api_key, model, t_results
         return
     except TimeoutError:
         # fail
-        messagebox.showerror("GPT Call Fail!", "The call to ChatGPT to generate the multiple choice options timed out!")
-        return
+        messagebox.showerror("GPT Call Fail!", "A call to ChatGPT to generate a question timed out!")
+        return None
     except Exception as e:
         # fail
         print(f"Error: {str(e)}")
-        messagebox.showerror("GPT Gen Fail!", "The call to ChatGPT generated an exception, this is expected, but you will likely have less AI questions than anticipated!")
-        return
+        messagebox.showerror("GPT Gen Fail!", "A call to ChatGPT generated an exception, this can happen, but it should have no result on your quiz!")
+        return None
 
 def get_random_numaric_str(unique_arr, character_set, stri, unique):
     # copy the passed string to modify

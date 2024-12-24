@@ -141,18 +141,92 @@ class Quiz(ctk.CTkFrame):
         self.was_modified = modified
         self.timer = time_limit * 60
         self.settings = settings
+        self.progress = tk.DoubleVar()
+        self.parent = parent
+        self.additive_ai_questions = additive_ai_questions
+        self.per_page = per_page
         
+        # predetermine the maximum number of threads allowed
+        match settings["Model"]:
+            case 0:
+                self.max_threads = 5
+            case 1: 
+                self.max_threads = 2
+            case 2:
+                self.max_threads = 1
+        
+        # pack self
+        self.pack(expand=True, fill='both')
+        
+        # quickly place a progress bar for generating the quiz
+        self.cover = ctk.CTkFrame(self.parent, fg_color=BG, corner_radius=0)
+        paitence_frame = ctk.CTkFrame(self.cover, fg_color=LIGHT, corner_radius=0)
+        header = ctk.CTkLabel(paitence_frame, text="Making your quiz!", fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'))
+        header.pack(expand=True, fill='x', padx=10, pady=5)
+        self.progress_bar = ctk.CTkProgressBar(paitence_frame, progress_color=SUCCESS, variable=self.progress)
+        self.progress.set(0.0)
+        self.progress_bar.pack(padx=10, pady=5)
+        self.progress_bar_explaination = ctk.CTkLabel(paitence_frame, text="Once we generate your questions, we'll deliver your quiz to you shortly!", font=(FONT, NORMAL_FONT_SIZE))
+        self.progress_bar_explaination.pack(expand=True, fill='x', padx=10, pady=5)
+        paitence_frame.place(anchor='center', rely=0.5, relx=0.5)
+        self.cover.place(anchor='center', relwidth=1, relheight=1, rely=0.5, relx=0.5)
+        
+        # perform the rest of the setup on its own thread
+        self.after(200, self.generate_quiz_phase_1)
+        
+    def generate_questions(self, ai_generated_questions, remaining):       
+        # Use batches to generate batches of questions
+        if remaining > 0:
+            # get the quota for THIS iteration
+            quota = self.max_threads if remaining >= self.max_threads else remaining
+            num_of_threads = quota // 1 if quota < self.max_threads else self.max_threads
+            size_of_last_thread = quota if quota < self.max_threads else 1
+            
+            # use these metrics to get a batch using threads
+            batch = generate_single_batch_of_questions(self.question_bank, num_of_threads, size_of_last_thread, self.domain, self.context, self.settings["API Key"], self.settings["Model"])
+        
+            # using the batch's size, report progress and remaining count
+            ai_generated_questions.extend(batch)
+            self.progress.set(len(ai_generated_questions) / self.ai_q_count)
+            remaining -= len(batch)
+            
+            # make recursive call to continue generation
+            self.after(1000, lambda: self.generate_questions(ai_generated_questions, remaining))
+        else:
+            # All questions are generated, iterate through the collection and number them appropriately
+            q_count = len(self.question_bank)
+            self.progress.set(1.0)
+            for question in ai_generated_questions:
+                q_count += 1
+                question["Q"] = str(q_count)
+            
+            # Then move to the final phase
+            self.after(100, self.generate_quiz_phase_2)
+    
+    def poll_changes(self):
+        self.progress_bar.set(self.progress.get())
+        self.after(200, self.poll_changes)
+        
+    def generate_quiz_phase_1(self):
         # get the number of questions to generate from chatGPT
         self.ai_q_count = round(self.question_count * self.ai_prop)
         
         # if we are generating AI questions ontop of the original questions, add the ai_q_count BACK to the question count
-        if additive_ai_questions:
+        if self.additive_ai_questions:
             self.question_count += self.ai_q_count
         
         # get the AI generated questions, make a copy for one pool without questions
         self.bank = self.question_bank.copy()
-        ai_questions = self.generate_questions()
-        self.question_bank += ai_questions
+        
+        # generate questions in parallel, and poll/join the thread every second
+        self.ai_questions = []
+        self.generate_questions(self.ai_questions, self.ai_q_count)
+        
+        
+    def generate_quiz_phase_2(self):
+        # With all ai_questions generated, generate the quiz elements
+        self.question_bank += self.ai_questions
+        self.progress_bar_explaination.configure(text="Wraping up...")
         
         # if we have a timer, create a frame and label for said timer
         self.timer_frame = None
@@ -166,6 +240,7 @@ class Quiz(ctk.CTkFrame):
         
         # create a frame to store buttons to go to each question from anywhere in the quiz, of which also store the state on which each question is answered or not
         self.question_nav = ctk.CTkFrame(self, fg_color=LIGHT)
+        print(self.ai_questions)
         
         # create n questions
         self.questions = []
@@ -174,10 +249,10 @@ class Quiz(ctk.CTkFrame):
             # first, decide wheither or not to pick an ai question using the ai prop
             # this choice is random until we need to meet the budget for ai questions requested
             roll_em = random.random()
-            if (random.random() <= min(0.5, self.ai_prop) and ai_questions) or self.question_count - len(self.questions) == len(ai_questions):
+            if (random.random() <= min(0.5, self.ai_prop) and self.ai_questions) or self.question_count - len(self.questions) == len(self.ai_questions):
                 # pick an ai question and remove it from the ai bank
-                cur_question = random.choice(ai_questions)
-                ai_questions.remove(cur_question)
+                cur_question = random.choice(self.ai_questions)
+                self.ai_questions.remove(cur_question)
                 roll_em = 2
             else:
                 # pick a random question and remove it from the question bank
@@ -192,6 +267,8 @@ class Quiz(ctk.CTkFrame):
                     self.questions.append(TermDefinitionQuestion(self.question_frame, self, cur_question, i, roll_em == 2, roll_em <= self.frq_prop))
                 case "Ess":
                     self.questions.append(EssayQuestion(self.question_frame, self, cur_question, i, roll_em == 2, self.domain, self.context, self.settings))
+            
+        print(self.ai_questions)
             
         # create and pack a button for each question in the entire quiz, even if they may not be on the current page
         self.question_buttons = []
@@ -210,7 +287,7 @@ class Quiz(ctk.CTkFrame):
         self.question_nav.pack(fill='x')
         
         # pack the first p_count questions into the question frame
-        for i in range(per_page if per_page < len(self.questions) else len(self.questions)):
+        for i in range(self.per_page if self.per_page < len(self.questions) else len(self.questions)):
             self.questions[i].pack(expand=True, fill='x', padx=10, pady=10, ipady=5)
         self.question_frame.pack(expand=True, fill='both')
         
@@ -228,9 +305,10 @@ class Quiz(ctk.CTkFrame):
         # start the timer if needed
         if self.timer > 0:
             self.update_timer()
-        
-        # pack self
-        self.pack(expand=True, fill='both')
+            
+        # remove the progress bar
+        self.cover.place_forget()
+        del self.cover
         
     def update_timer(self):
         # check if there is time left
@@ -311,10 +389,7 @@ class Quiz(ctk.CTkFrame):
         elif not self.graded:
             self.grade_button.pack(side='left', padx=10, pady=5, anchor='center')
         
-    def generate_questions(self):
-        # Using the API, in parallel generate enough AI questions to meet the quota internally defined
-        return batch_generate_questions(self.question_bank, self.ai_q_count, self.domain, self.context, self.settings["API Key"], self.settings["Model"])
-        
+       
     def grade_quiz(self, forced = False):
         # ask if the user wants to submit their quiz for sure
         if not forced and not messagebox.askyesno("Warning!", "Are you sure you want to submit your quiz for a final grade?"):
@@ -514,6 +589,10 @@ class MultipleChoiceQuestion(ctk.CTkFrame):
             
                   
     def has_answer(self, event = None):
+        # ignore if the question has been graded
+        if self.score != -1:
+            return
+        
         # having a flag enabled superceeds all of these options:
         if not "Flag" in self.question_data:
             # switch on being an frq
@@ -722,6 +801,10 @@ class TermDefinitionQuestion(ctk.CTkFrame):
                 self.parent.question_buttons[self.index].configure(hover_color=FLAG_HIGHLIGHT_HOVER)
                   
     def has_answer(self, event = None):
+        # ignore if the question has been graded
+        if self.score != -1:
+            return
+        
         # having a flag enabled superceeds all of these options:
         if not "Flag" in self.question_data:
             # switch on being an frq
@@ -885,6 +968,10 @@ class EssayQuestion(ctk.CTkFrame):
             
                   
     def has_answer(self, event = None):
+        # ignore if the question has been graded
+        if self.score != -1:
+            return
+        
         # having a flag enabled superceeds all of these options:
         if not "Flag" in self.question_data:
             # this question has an answer if the paragraph field has content
@@ -946,7 +1033,10 @@ class EssayQuestion(ctk.CTkFrame):
         grade_label = ctk.CTkLabel(explaination_frame, image=grade_pic, text='')
         grade_label.grid(column=0, row=0, sticky='w', padx=10)
         explain_frame = ctk.CTkFrame(explaination_frame, fg_color='transparent')
-        ctk.CTkLabel(explain_frame, text="Guidelines: " + wrap_text(self.question_data["Guidelines"], 120), fg_color='transparent', justify='left', font=(FONT, NORMAL_FONT_SIZE)).pack(padx=10, pady=5, anchor='nw')
+        
+        # only pack the guidelines if we are grading against the guidelines
+        if(self.question_data["UseGL"] == "1"):
+            ctk.CTkLabel(explain_frame, text="Guidelines: " + wrap_text(self.question_data["Guidelines"], 120), fg_color='transparent', justify='left', font=(FONT, NORMAL_FONT_SIZE)).pack(padx=10, pady=5, anchor='nw')
         
         # write the explanation with imbeds if added
         create_embed_frame(explain_frame, "Explaination: " + self.question_data["Explaination"], 120, 128).pack(padx=10, pady=5, anchor='nw')

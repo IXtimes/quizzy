@@ -234,6 +234,8 @@ class MainMenu(ctk.CTkFrame):
                 self.is_offline_var.set(0)
                 #self.context_cutoff_amnt.insert(tk.END, "0")
                 #self.batch_size.set(5)
+                
+            determine_model_str_from_index(settings['Model'])
         
         # pack the main menu
         self.pack(expand=True, fill='both', anchor='center')
@@ -309,6 +311,8 @@ class MainMenu(ctk.CTkFrame):
                     'Offline': self.is_offline_var.get() != 0}
                     #'ContextCut': self.context_cutoff_amnt.get('1.0', 'end-1c') if self.context_cutoff_amnt.get('1.0', 'end-1c').isdigit() else 50,
                     #'Batch': self.batch_size.get()}  
+                    
+        determine_model_str_from_index(settings['Model'])
         
         # push settings information to the user path
         json_settings = json.dumps(settings, indent=4)

@@ -232,18 +232,8 @@ class QuizFrame(ctk.CTkFrame):
             "ai_questions_are_added": bool(self.add_ai.get())
         }
         
-        # quickly place in the overall builder a disclaimer
-        cover = ctk.CTkFrame(self.parent, fg_color=BG, corner_radius=0)
-        paitence_frame = ctk.CTkFrame(cover, fg_color=LIGHT, corner_radius=0)
-        header = ctk.CTkLabel(paitence_frame, text="Making your quiz!", fg_color='transparent', font=(FONT, TITLE_FONT_SIZE, 'bold'))
-        header.pack(expand=True, fill='x', padx=10, pady=5)
-        explaination = ctk.CTkLabel(paitence_frame, text='Rendering quiz elements and prompting for questions takes a bit, \nbut this shouldn\'t take longer than a minute!', font=(FONT, NORMAL_FONT_SIZE))
-        explaination.pack(expand=True, fill='x', padx=10, pady=5)
-        paitence_frame.place(anchor='center', rely=0.5, relx=0.5)
-        cover.place(anchor='center', relwidth=1, relheight=1, rely=0.5, relx=0.5)
-        
         # send to the quiz builder
-        self.after(100, lambda:self.get_quiz(data, content, quiz_properties, self.settings))
+        self.after(0, lambda:self.get_quiz(data, content, quiz_properties, self.settings))
         
     def check_for_valid_gen(self, *args):
         # check if this change in question count changes the quiz condition
@@ -606,7 +596,7 @@ class BuilderFrame(ctk.CTkFrame):
                 submit_list['Explaination'] = self.question.explaination
             case "Ess": # collect all correct and incorrect answers inputted, gained from the question's provided opened fields
                 submit_list['Format'] = str(self.question.format.get())
-                submit_list['Difficulty'] = str(self.question.difficulty.get())
+                submit_list['UseGL'] = str(self.question.use_guideline.get())
                 submit_list["Question"] = self.question.question_entry.get('1.0', 'end-1c')
                 submit_list["Guidelines"] = self.question.guidelines_entry.get('1.0', 'end-1c')
                 if int(submit_list['Format']) == 1:
@@ -1202,18 +1192,8 @@ class Essay(ctk.CTkFrame):
         self.code.pack(side='right')
         self.explain.pack(side='right')
         self.format_to_be.pack(expand=True, fill='both')
-        
-        # also pack at the top of the frame 3 MORE radio buttons allowing for different grading difficulties
-        self.difficulty = tk.IntVar()
-        self.difficulty.set(0)
-        self.difficulty_to_be = ctk.CTkFrame(self, fg_color='transparent')
-        self.easy = ctk.CTkRadioButton(self.difficulty_to_be, radiobutton_height=9, radiobutton_width=9, text="Be Familar", variable=self.difficulty, font=(FONT, SMALL_FONT_SIZE), value=0, command=modified_func)
-        self.medium = ctk.CTkRadioButton(self.difficulty_to_be, radiobutton_height=9, radiobutton_width=9, text="Know", variable=self.difficulty, font=(FONT, SMALL_FONT_SIZE), value=1, command=modified_func)
-        self.hard = ctk.CTkRadioButton(self.difficulty_to_be, radiobutton_height=9, radiobutton_width=9, text="Master", variable=self.difficulty, font=(FONT, SMALL_FONT_SIZE), value=2, command=modified_func)
-        self.hard.pack(side='right')
-        self.medium.pack(side='right')
-        self.easy.pack(side='right')
-        self.difficulty_to_be.pack(expand=True, fill='both')
+        self.use_guideline = tk.IntVar()
+        self.use_guideline.set(0)
         
         # create a frame for the question entry
         self.question = ctk.CTkFrame(self, fg_color='transparent')
@@ -1226,6 +1206,17 @@ class Essay(ctk.CTkFrame):
         self.question_entry.grid(column=1, row=0, sticky='ew')
         self.question_entry.bind('<KeyRelease>', modified_func)
         self.question.pack(fill='x', side='top', pady=2)
+        
+        # create a toggle for if this question should use guidelines
+        self.use_guidelines = ctk.CTkFrame(self, fg_color='transparent')
+        self.use_guidelines.columnconfigure((0, 1), weight=1, uniform='a')
+        self.use_guidelines.columnconfigure(2, weight=1, uniform='a')
+        self.use_guidelines.rowconfigure(0, weight=1)
+        self.use_guidelines_label = ctk.CTkLabel(self.use_guidelines, text="Grade using guidelines? ", fg_color='transparent', font=(FONT, NORMAL_FONT_SIZE))
+        self.use_guidelines_label.grid(row=0, column=0, sticky='w')
+        self.use_guidelines_toggle = ctk.CTkSwitch(self.use_guidelines, text="", variable=self.use_guideline, onvalue=1, offvalue=0, command=self.enable_guidelines_entry)
+        self.use_guidelines_toggle.grid(row=0, column=1, sticky='w')
+        self.use_guidelines.pack(fill='x')
         
         # create a wide textbox for the guidelines for the question
         self.guidelines = ctk.CTkFrame(self, fg_color='transparent')
@@ -1283,10 +1274,14 @@ class Essay(ctk.CTkFrame):
                     # update the radio button controlled variable
                     self.format.set(int(value))
                     
-                # is this the difficulty of the question?
-                if key == 'Difficulty':
+                # is this the use guidelines toggle of the question?
+                if key == 'UseGL':
                     # update the radio button controlled variable
-                    self.difficulty.set(int(value))
+                    self.use_guideline.set(int(value))
+                    
+            # modify the UI to match dependent variables
+            self.enable_code_prompt()
+            self.enable_guidelines_entry()
         
         # bind the event to the question text box that resizes it on keystrokes
         self.question_data = tk.StringVar()
@@ -1294,6 +1289,16 @@ class Essay(ctk.CTkFrame):
         
         # pack the whole enchilatta
         self.pack(fill='x')
+        
+    def enable_guidelines_entry(self):
+        # this modifies the question
+        self.modified_func()
+        
+        # determine if we need to render the code prompt
+        if self.use_guideline.get() == 1:
+            self.guidelines.pack(fill='x', side='top', pady=2)
+        else:
+            self.guidelines.pack_forget()
         
     def enable_code_prompt(self):
         # this modifies the question
